@@ -1,0 +1,12 @@
+project_id = "haushalt"
+
+[functions.household-tick]
+# The cron job cannot present a user JWT. Authorisation is the x-cron-secret
+# header instead — see supabase/functions/_shared/supabase.ts.
+verify_jwt = false
+
+[functions.lookup-barcode]
+verify_jwt = true
+
+[functions.ocr-receipt]
+verify_jwt = true

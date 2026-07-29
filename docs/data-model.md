@@ -1,6 +1,9 @@
 # Haushalt — Data Model & Architecture Proposal
 
-Status: **proposal, awaiting sign-off**. Nothing implemented yet.
+Status: **implemented**. This is the design write-up; the schema itself lives in
+`supabase/migrations/` and is verified by `npm run test:db`. Where implementation
+diverged from the original proposal, [§16](#16-what-changed-during-implementation)
+says so.
 
 Target: one household, two members, Expo + Supabase, realtime everywhere, no custom server.
 
@@ -444,11 +447,38 @@ supabase/functions/
 4. TanStack Query for server state, no Redux.
 5. Receipts stored at ~1600px JPEG, client-compressed before upload.
 
-## 15. What I'd like you to confirm
+## 16. What changed during implementation
 
-1. **The model overall** — anything missing or over-built?
-2. **Partial settlements**: whole-expense closing (my recommendation) vs. arbitrary-amount ledger — §5.
-3. **Push = development build required.** OK to build one, or should reminders degrade to local-only notifications until you're ready?
-4. **UI language German?** (Assuming yes.)
+Four things came out differently than proposed. All of them were forced by something
+real rather than chosen.
 
-Say go and I'll start with the migrations, in the order above.
+**1. Expenses must be created through an RPC.** The proposal had the client writing
+`expenses` and `expense_shares` in one transaction. It cannot: PostgREST gives you one
+statement per request, so the two inserts are two transactions and the deferred balance
+constraint rejects the first one every time. The schema test caught this immediately —
+the invariant fired exactly as designed and made the flaw in the plan obvious.
+`create_expense()` / `update_expense()` / `apply_expense_split()` were added, and the
+split rules (equal / custom shares / per item) now live in SQL with a mirrored
+TypeScript implementation used only for the live preview.
+
+**2. A `push_receipts` table was added.** Expo accepts a push immediately (a "ticket")
+and only reports actual delivery minutes later (a "receipt"). One `notification_log`
+row fans out to several devices, so tickets could not be stored on it. Without this
+table, dead tokens could not be traced back to the device that produced them, and the
+self-healing described in §10 would not work.
+
+**3. Realtime invalidates queries instead of patching the cache.** §11 proposed
+patching rows in place. That is wrong for this schema: the Putzplan and the balance
+card read *views*, whose row shape is not the row shape of the table that changed.
+Patching would mean re-deriving `status`, `days_until` and every balance on the client
+— a second implementation of logic Postgres already owns, free to drift from it. A
+prefix invalidation costs one small refetch and is always correct. The two interactions
+that must feel instant (ticking a chore, checking a to-do) are optimistic locally.
+
+**4. `schedule_mode` defaults to `after_completion`.** The proposal left the default
+open. Most chores people actually add ("saugen alle 4 Tage") are interval-based; the
+calendar-pinned ones are the minority and are the ones people set deliberately.
+
+Everything else — the tenant model, composite foreign keys, the deferred balance
+trigger, cents as `bigint`, the hourly cron with the keep-alive ahead of the reminder
+logic, whole-expense settlements, the two-tier product catalog — shipped as described.

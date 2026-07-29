@@ -1,25 +1,67 @@
 {
   "expo": {
-    "name": "haushalt",
-    "slug": "haushalt",
+    "name": "HouseWife",
+    "slug": "housewife",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "housewife",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.housewife",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.example.housewife",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.VIBRATE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-image",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "HouseWife nutzt die Kamera, um Barcodes zu scannen und Belege zu fotografieren."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "HouseWife greift auf deine Fotos zu, um Belege an Ausgaben anzuhängen."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#2563EB",
+          "defaultChannel": "putzplan"
+        }
+      ],
+      "expo-font"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b7810708-c0d9-4d90-93f2-91ff1e425397"
+      }
     }
   }
 }
