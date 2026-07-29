@@ -26,7 +26,6 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.VIBRATE",
-        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -57,10 +56,11 @@
       ],
       "expo-font"
     ],
+    "owner": "happyknuckles",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "b7810708-c0d9-4d90-93f2-91ff1e425397"
+        "projectId": "d9ea6b6a-3b36-44b1-bd6b-3d90f9f904fb"
       }
     }
   }
