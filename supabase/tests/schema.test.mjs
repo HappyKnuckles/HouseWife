@@ -384,6 +384,134 @@ ok('checking off stamps done_at/done_by automatically',
 r = await as(USER_B, `update public.todos set is_done = false where id='${TODO}' returning done_at, done_by`);
 ok('unchecking clears them again', r.rows[0].done_at === null && r.rows[0].done_by === null);
 
+section('restock to-dos');
+// Only the cron ever calls this — it is revoked from `authenticated`, the same
+// way generate_due_recurring_expenses() is, so the tests drive it as the cron
+// does rather than as a member.
+const runRestock = async () => {
+  await db.exec(`set role service_role;`);
+  const out = await db.query(`select public.generate_restock_todos() as n`);
+  await db.exec(`set role postgres;`);
+  return Number(out.rows[0].n);
+};
+
+err = await asExpectError(USER_A, `select public.generate_restock_todos()`);
+ok('a member cannot run the generator by hand', err !== null, 'execute was not revoked');
+
+// The staples section left "Mehl" (no barcode) at 0 with a threshold of 1, and
+// the trigger from 0021 already wrote the to-do at that moment — no cron run
+// needed, which is the whole point.
+r = await as(USER_A, `select title, source, product_id from public.todos
+                    where source='restock' and household_id='${HH}'`);
+ok('a low staple writes itself onto the list',
+   r.rows.length === 1 && r.rows[0].title === 'Mehl kaufen' && r.rows[0].product_id !== null,
+   JSON.stringify(r.rows));
+
+ok('the hourly reconcile then finds nothing left to do', (await runRestock()) === 0);
+
+// The dedupe: an hourly cron must not pile up one to-do per run.
+await runRestock();
+await runRestock();
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock'`);
+ok('running again does not duplicate it', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// Restocking clears it again — a shopping list that lies gets ignored — and
+// without waiting for the cron: the trigger has to do it, because the list is
+// wrong exactly while you are looking at it.
+await as(USER_A, `select * from public.inventory_scan_in(null, 'Mehl', '${LOC}', 10)`);
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock' and not is_done`);
+ok('scanning stock back in clears the to-do immediately', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+// ...and emptying it again brings the to-do back on the spot, including via the
+// delete inventory_adjust() does when the last lot hits zero.
+r = await as(USER_A, `select i.id from public.inventory_items i
+                    join public.products p on p.id = i.product_id
+                    where lower(p.name)='mehl' and p.barcode is null`);
+await as(USER_A, `select * from public.inventory_adjust('${r.rows[0].id}', -99, 'consume')`);
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock' and not is_done`);
+ok('emptying the last lot writes the to-do back immediately', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// Turning the reminder off should take the to-do with it.
+await as(USER_A, `update public.products set restock_min_quantity = null
+                  where lower(name)='mehl' and barcode is null`);
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock' and not is_done`);
+ok('switching the reminder off removes the to-do', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+await as(USER_A, `update public.products set restock_min_quantity = 1
+                  where lower(name)='mehl' and barcode is null`);
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock' and not is_done`);
+ok('...and switching it back on restores it', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// Back to the state the rest of this section expects.
+await as(USER_A, `select * from public.inventory_scan_in(null, 'Mehl', '${LOC}', 10)`);
+await runRestock();
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock' and not is_done`);
+ok('the hourly reconcile agrees with the triggers', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+// A hand-written to-do for the same thing is none of the generator's business.
+await as(USER_A, `insert into public.todos (household_id, title, created_by)
+                  values ('${HH}', 'Mehl kaufen', '${USER_A}')`);
+await runRestock();
+r = await as(USER_A, `select count(*)::int n from public.todos where title='Mehl kaufen' and source='manual'`);
+ok('a manual to-do with the same title is left alone', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// A ticked-off restock to-do is history and must not block the next one.
+await db.exec(`set role postgres;
+  update public.products set restock_min_quantity = 20 where lower(name)='mehl' and barcode is null;`);
+await runRestock();
+r = await as(USER_A, `select id from public.todos where source='restock' and not is_done`);
+ok('it comes back when stock drops below the threshold again', r.rows.length === 1, JSON.stringify(r.rows));
+await as(USER_A, `update public.todos set is_done = true where id='${r.rows[0].id}'`);
+await runRestock();
+r = await as(USER_A, `select count(*)::int n from public.todos where source='restock'`);
+ok('ticking it off lets the next one be created', r.rows[0].n === 2, `got ${r.rows[0].n}`);
+
+section('house rules');
+for (const text of ['Schuhe aus', 'Müll raus am Dienstag', 'Spülmaschine ausräumen']) {
+  await as(USER_A, `insert into public.house_rules (household_id, text, position, created_by)
+                    values ('${HH}', '${text}', (
+                      select coalesce(max(position), 0) + 1 from public.house_rules where household_id='${HH}'
+                    ), '${USER_A}')`);
+}
+
+r = await as(USER_B, `select text from public.house_rules where household_id='${HH}' order by position`);
+ok('both members see the same ordered list',
+   r.rows.map((x) => x.text).join(' | ') === 'Schuhe aus | Müll raus am Dienstag | Spülmaschine ausräumen',
+   JSON.stringify(r.rows));
+
+r = await as(USER_A, `select id from public.house_rules where text='Spülmaschine ausräumen'`);
+const RULE = r.rows[0].id;
+
+await as(USER_B, `select public.house_rules_move('${RULE}', 'up')`);
+r = await as(USER_A, `select text from public.house_rules where household_id='${HH}' order by position`);
+ok('moving a rule up swaps it with its neighbour',
+   r.rows.map((x) => x.text).join(' | ') === 'Schuhe aus | Spülmaschine ausräumen | Müll raus am Dienstag',
+   JSON.stringify(r.rows));
+
+// Already first: a no-op rather than an error, so holding the button does not
+// start throwing once the top is reached.
+r = await as(USER_A, `select id from public.house_rules where text='Schuhe aus'`);
+await as(USER_A, `select public.house_rules_move('${r.rows[0].id}', 'up')`);
+r = await as(USER_A, `select text from public.house_rules where household_id='${HH}' order by position limit 1`);
+ok('moving the first rule up changes nothing', r.rows[0].text === 'Schuhe aus', JSON.stringify(r.rows[0]));
+
+// Equal positions cannot come from the app, but two clients inserting in the
+// same moment can produce them — the swap must still make progress.
+await db.exec(`set role postgres;
+  update public.house_rules set position = 1 where household_id='${HH}';`);
+r = await as(USER_A, `select id, text from public.house_rules where household_id='${HH}' order by created_at offset 1 limit 1`);
+await as(USER_A, `select public.house_rules_move('${r.rows[0].id}', 'up')`);
+const MOVED = r.rows[0].text;
+r = await as(USER_A, `select text from public.house_rules where household_id='${HH}' order by position, created_at limit 1`);
+ok('a tie on position still reorders', r.rows[0].text === MOVED, JSON.stringify(r.rows[0]));
+
+err = await asExpectError(USER_A, `select public.house_rules_move('${RULE}', 'sideways')`);
+ok('an unknown direction is rejected', err !== null, 'bad direction unexpectedly accepted');
+
+err = await asExpectError(USER_A, `insert into public.house_rules (household_id, text)
+                                  values ('00000000-0000-0000-0000-000000000000', 'Fremde Regel')`);
+ok('a rule cannot be written into another household', err !== null, 'RLS let a foreign insert through');
+
 section('recurring expenses');
 await db.exec(`set role postgres;
   insert into public.recurring_expenses

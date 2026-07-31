@@ -26,7 +26,7 @@ phones — no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        19 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        22 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
     household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
@@ -330,7 +330,8 @@ npm run test:db
 
 ```sql
 select ran_at, households_scanned, tasks_due, notifications_sent,
-       restock_notifications_sent, recurring_expenses_generated, duration_ms, error
+       restock_notifications_sent, recurring_expenses_generated,
+       restock_todos_synced, duration_ms, error
 from public.system_heartbeat
 order by ran_at desc
 limit 24;
@@ -484,6 +485,32 @@ constrains its own kind of row — and both stay usable as a PostgREST
 `on_conflict` target, which a partial index would not be. `due_on` carries the
 household-local date, so an empty staple nudges at most once per person per day
 and stops by itself once stock is back above the threshold.
+
+### A low staple writes itself onto the to-do list
+
+The push is a nudge that is gone once dismissed; what you need at the shop is a
+list, and there already is one. Any product with a `restock_min_quantity` — the
+switch on the product screen — gets an open `X kaufen` to-do while it is at or
+below that threshold, and loses it again when stock recovers. No second opt-in:
+having asked to be reminded *is* the opt-in.
+
+`todos.source` separates the two kinds of row. A `'restock'` row is the
+generator's to manage; a `'manual'` one you wrote yourself is never touched,
+even if it says exactly the same thing. `todos_restock_open_unique` is partial
+on `(household_id, product_id) where source = 'restock' and not is_done`, which
+is what stops an hourly cron from stacking up one to-do per run while still
+letting a *new* one appear months after you ticked the last one off.
+
+Both directions run in triggers on `inventory_items` and on
+`products.restock_min_quantity`, not only in the cron. Reconciling once an hour
+was the obvious first cut and it is wrong in the one moment that matters: you
+scan the flour back in, look at the list, and it still says buy flour. The cron
+still calls the same function afterwards as a safety net for anything that
+changed by another route.
+
+`created_by` stays NULL on a generated row — nobody wrote it, and putting one of
+the two members' faces on it would be a small lie. The to-dos screen marks them
+with a cart icon and links through to the product instead.
 
 ### Moving stock merges, and splits
 

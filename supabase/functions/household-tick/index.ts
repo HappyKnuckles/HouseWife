@@ -1,7 +1,7 @@
 /**
  * household-tick — the scheduled heartbeat of the whole system.
  *
- * Runs hourly via pg_cron + pg_net (see README). Three jobs, in this order:
+ * Runs hourly via pg_cron + pg_net (see README). Four jobs, in this order:
  *
  *   1. KEEP-ALIVE. A read and a write, both through PostgREST, executed before
  *      anything else and in their own try/catch. Supabase pauses free projects
@@ -16,7 +16,12 @@
  *      Also unconditional — a bill's due date does not depend on a
  *      household's chosen reminder hour.
  *
- *   3. REMINDERS, per household at its own local reminder_hour: staples that
+ *   3. RESTOCK TO-DOS. Keeps one open "X kaufen" to-do per staple that has
+ *      fallen to its threshold, and removes it again once stock recovers.
+ *      Unconditional too: the shopping list should be right whenever it is
+ *      opened, not only after the household's reminder hour has passed.
+ *
+ *   4. REMINDERS, per household at its own local reminder_hour: staples that
  *      have fallen to or below their restock threshold, then cleaning tasks
  *      that are due or overdue. Both fire with the app closed.
  *
@@ -269,6 +274,7 @@ Deno.serve(async (req) => {
   let notificationsSent = 0;
   let restockNotificationsSent = 0;
   let recurringExpensesGenerated = 0;
+  let restockTodosSynced = 0;
   let runError: string | null = null;
 
   // --------------------------------------------------------------------------
@@ -284,6 +290,20 @@ Deno.serve(async (req) => {
     recurringExpensesGenerated = data ?? 0;
   } catch (err) {
     console.error('recurring expense generation failed:', err);
+  }
+
+  // --------------------------------------------------------------------------
+  // 1.6 RESTOCK TO-DOS — unconditional as well. The push in job 2a is a nudge
+  // at the household's chosen hour; the list has to be right whenever someone
+  // opens it, including at the shop at 9 in the morning. Own try/catch for the
+  // same reason as the others.
+  // --------------------------------------------------------------------------
+  try {
+    const { data, error } = await supabase.rpc('generate_restock_todos');
+    if (error) throw error;
+    restockTodosSynced = data ?? 0;
+  } catch (err) {
+    console.error('restock to-do sync failed:', err);
   }
 
   try {
@@ -508,6 +528,7 @@ Deno.serve(async (req) => {
         notifications_sent: notificationsSent,
         restock_notifications_sent: restockNotificationsSent,
         recurring_expenses_generated: recurringExpensesGenerated,
+        restock_todos_synced: restockTodosSynced,
         duration_ms: durationMs,
         error: runError,
       })
@@ -522,6 +543,7 @@ Deno.serve(async (req) => {
       notifications_sent: notificationsSent,
       restock_notifications_sent: restockNotificationsSent,
       recurring_expenses_generated: recurringExpensesGenerated,
+      restock_todos_synced: restockTodosSynced,
       duration_ms: durationMs,
       error: runError,
     }),

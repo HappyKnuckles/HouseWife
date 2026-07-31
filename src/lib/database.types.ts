@@ -49,6 +49,8 @@ export type LocationKind = 'room' | 'shelf' | 'box' | 'fridge' | 'freezer' | 'ca
 export type ProductUnit = 'piece' | 'g' | 'kg' | 'ml' | 'l' | 'pack';
 export type MovementReason = 'scan_in' | 'manual_adjust' | 'consume' | 'move' | 'correction' | 'initial';
 export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock';
+/** 'restock' rows are written by generate_restock_todos(), not by a person. */
+export type TodoSource = 'manual' | 'restock';
 export type Platform = 'ios' | 'android';
 
 // ---------------------------------------------------------------------------
@@ -181,6 +183,18 @@ export type TodoRow = {
   is_done: boolean;
   done_at: string | null;
   done_by: string | null;
+  position: number;
+  product_id: string | null;
+  source: TodoSource;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type HouseRuleRow = {
+  id: string;
+  household_id: string;
+  text: string;
   position: number;
   created_by: string | null;
   created_at: string;
@@ -360,6 +374,7 @@ export type SystemHeartbeatRow = {
   notifications_sent: number;
   restock_notifications_sent: number;
   recurring_expenses_generated: number;
+  restock_todos_synced: number;
   duration_ms: number | null;
   error: string | null;
 }
@@ -530,7 +545,8 @@ export type Database = {
         RecurringExpenseRow,
         Stamps | 'currency' | 'recurrence_unit' | 'recurrence_interval' | 'next_due_on' | 'is_active'
       >;
-      todos: Table<TodoRow, Stamps | 'is_done' | 'position'>;
+      todos: Table<TodoRow, Stamps | 'is_done' | 'position' | 'source' | 'product_id'>;
+      house_rules: Table<HouseRuleRow, Stamps | 'position'>;
       cleaning_areas: Table<CleaningAreaRow, Stamps | 'icon' | 'color' | 'sort_order'>;
       cleaning_tasks: Table<
         CleaningTaskRow,
@@ -564,6 +580,7 @@ export type Database = {
         | 'notifications_sent'
         | 'restock_notifications_sent'
         | 'recurring_expenses_generated'
+        | 'restock_todos_synced'
       >;
     };
     Views: {
@@ -646,6 +663,10 @@ export type Database = {
         /** `p_quantity` null moves the whole lot. */
         Args: { p_item_id: string; p_location_id?: string | null; p_quantity?: number | null };
         Returns: InventoryItemRow;
+      };
+      house_rules_move: {
+        Args: { p_rule_id: string; p_direction: 'up' | 'down' };
+        Returns: undefined;
       };
       seed_starter_data: { Args: { p_household_id: string }; Returns: undefined };
     };

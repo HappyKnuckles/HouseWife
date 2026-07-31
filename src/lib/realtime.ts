@@ -35,6 +35,7 @@ const TABLE_INVALIDATIONS: Record<string, Subscription> = {
   recurring_expenses: { keys: [['expenses']] },
 
   todos: { keys: [['todos']] },
+  house_rules: { keys: [['rules']] },
 
   inventory_items: { keys: [['inventory']] },
   products: { keys: [['inventory']] },

@@ -302,6 +302,11 @@ scan (expo-camera) → local products by barcode?  → yes: increment quantity, 
 
 Cheap to write, and it's what makes concurrent edits from two phones debuggable ("who took the last one?"). `quantity` stays denormalized on `inventory_items` for fast reads; movements are the log, written in the same RPC.
 
+### `todos.source` / `todos.product_id`
+`source text check (source in ('manual','restock'))`, `product_id uuid` with a composite FK to `(products.id, household_id)`.
+
+A `'restock'` row is written and removed by `sync_restock_todos()` — triggers on `inventory_items` and on `products.restock_min_quantity` run it for one product, the hourly cron runs it for all of them. `unique (household_id, product_id) where source = 'restock' and not is_done` is what makes an hourly reconcile idempotent while still allowing a fresh to-do after the last one was ticked off. A `'manual'` row is never touched by the generator, even with an identical title.
+
 `delta` is per **lot**, not per product, which is what makes `reason='move'` readable: a lot that simply changes shelf logs one row with `delta 0` (nothing about that lot's quantity changed), while stock moving *between* two lots — a merge, or a partial move — logs a `-n`/`+n` pair. Either way the move rows sum to zero, so a move can never invent or lose stock.
 
 ### `inventory_move(p_item_id, p_location_id, p_quantity)`

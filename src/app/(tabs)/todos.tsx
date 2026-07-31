@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import { Avatar } from '../../components/Avatar';
+import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
 import { Chip } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
@@ -15,7 +17,9 @@ import {
   useDeleteTodo,
   useTodos,
   useToggleTodo,
+  useUpdateTodo,
 } from '../../features/todos/hooks';
+import { Alert } from '../../lib/alert';
 import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -49,22 +53,30 @@ export default function TodosScreen() {
       justifyContent: 'center' as const,
     },
     checkboxDone: { backgroundColor: c.success, borderColor: c.success },
+    rowEditing: { borderWidth: 1, borderColor: c.primary },
     rowText: { flex: 1, gap: 2 },
     rowTitle: { ...typography.body, color: c.text },
     rowTitleDone: { textDecorationLine: 'line-through' as const, color: c.textMuted },
     rowMeta: { ...typography.caption, color: c.textFaint },
+    metaRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
+    composerActions: { flexDirection: 'row' as const, gap: spacing.md },
+    flex: { flex: 1 },
   }));
   const { data: todos, isLoading, isRefetching, refetch, error } = useTodos();
   const { data: members } = useMembers();
   const memberMap = useMemberMap();
 
+  const router = useRouter();
   const addTodo = useAddTodo();
+  const updateTodo = useUpdateTodo();
   const toggleTodo = useToggleTodo();
   const deleteTodo = useDeleteTodo();
   const clearCompleted = useClearCompleted();
 
   const [title, setTitle] = useState('');
   const [assignee, setAssignee] = useState<string | null>(null);
+  /** Which to-do the composer is currently editing; null = writing a new one. */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   if (isLoading) return <LoadingState label="To-dos werden geladen…" />;
   if (error) return <ErrorState error={error} />;
@@ -76,15 +88,36 @@ export default function TodosScreen() {
     const trimmed = title.trim();
     if (!trimmed) return;
 
+    const id = editingId;
     setTitle('');
-    await addTodo.mutateAsync({ title: trimmed, assigneeId: assignee });
+    setEditingId(null);
+    setAssignee(null);
+
+    try {
+      if (id) await updateTodo.mutateAsync({ id, patch: { title: trimmed, assignee_id: assignee } });
+      else await addTodo.mutateAsync({ title: trimmed, assigneeId: assignee });
+    } catch (err) {
+      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function startEditing(todo: { id: string; title: string; assignee_id: string | null }) {
+    setEditingId(todo.id);
+    setTitle(todo.title);
+    setAssignee(todo.assignee_id);
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setTitle('');
+    setAssignee(null);
   }
 
   return (
     <Screen>
       <ScreenHeader
         title="To-dos"
-        subtitle={open.length === 0 ? 'Nichts offen 🎉' : `${open.length} offen`}
+        subtitle={open.length === 0 ? 'Nichts offen' : `${open.length} offen`}
         right={
           done.length > 0 ? (
             <Pressable onPress={() => void clearCompleted.mutateAsync()} hitSlop={8}>
@@ -98,7 +131,7 @@ export default function TodosScreen() {
         <TextField
           value={title}
           onChangeText={setTitle}
-          placeholder="Was muss erledigt werden?"
+          placeholder={editingId ? 'To-do ändern…' : 'Was muss erledigt werden?'}
           returnKeyType="done"
           onSubmitEditing={() => void submit()}
         />
@@ -114,6 +147,18 @@ export default function TodosScreen() {
             />
           ))}
         </View>
+        {editingId ? (
+          <View style={styles.composerActions}>
+            <Button label="Abbrechen" variant="secondary" onPress={cancelEditing} style={styles.flex} />
+            <Button
+              label="Speichern"
+              onPress={() => void submit()}
+              disabled={title.trim().length === 0}
+              loading={updateTodo.isPending}
+              style={styles.flex}
+            />
+          </View>
+        ) : null}
       </View>
 
       <FlatList
@@ -129,8 +174,16 @@ export default function TodosScreen() {
         renderItem={({ item }) => {
           const person = item.assignee_id ? memberMap[item.assignee_id] : null;
 
+          const fromInventory = item.source === 'restock';
+
           return (
-            <View style={[styles.row, item.is_done && styles.rowDone]}>
+            <View
+              style={[
+                styles.row,
+                item.is_done && styles.rowDone,
+                editingId === item.id && styles.rowEditing,
+              ]}
+            >
               <Pressable
                 onPress={() => {
                   void Haptics.selectionAsync();
@@ -144,14 +197,39 @@ export default function TodosScreen() {
                 {item.is_done ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
               </Pressable>
 
-              <View style={styles.rowText}>
+              <Pressable
+                onPress={() => startEditing(item)}
+                style={styles.rowText}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.title} bearbeiten`}
+              >
                 <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
                   {item.title}
                 </Text>
-                {person ? <Text style={styles.rowMeta}>für {person.display_name}</Text> : null}
-              </View>
+                {fromInventory ? (
+                  <View style={styles.metaRow}>
+                    <Ionicons name="cart-outline" size={12} color={colors.textFaint} />
+                    <Text style={styles.rowMeta}>
+                      Bestand niedrig{person ? ` · für ${person.display_name}` : ''}
+                    </Text>
+                  </View>
+                ) : person ? (
+                  <Text style={styles.rowMeta}>für {person.display_name}</Text>
+                ) : null}
+              </Pressable>
 
-              {person ? <Avatar name={person.display_name} color={person.color} size={24} /> : null}
+              {fromInventory && item.product_id ? (
+                <Pressable
+                  onPress={() => router.push(`/inventar/produkt/${item.product_id}`)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Produkt öffnen"
+                >
+                  <Ionicons name="cube-outline" size={18} color={colors.textFaint} />
+                </Pressable>
+              ) : person ? (
+                <Avatar name={person.display_name} color={person.color} size={24} />
+              ) : null}
 
               <Pressable
                 onPress={() => void deleteTodo.mutateAsync(item.id)}
