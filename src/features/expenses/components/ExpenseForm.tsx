@@ -11,7 +11,8 @@ import type { ExpenseItemInput, ProfileRow, SplitType } from '../../../lib/datab
 import { formatCents, parseAmountToCents } from '../../../lib/format';
 import { spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
-import { EXPENSE_CATEGORIES } from '../categories';
+import { EXPENSE_CATEGORIES, categoryMeta } from '../categories';
+import { useUsedCategories } from '../hooks';
 import { computeSplit, validateSplit } from '../split';
 
 interface DraftItem {
@@ -96,6 +97,36 @@ export function ExpenseForm({
   const [paidBy, setPaidBy] = useState<string | null>(initial?.paidBy ?? null);
   const [category, setCategory] = useState<string | null>(initial?.category ?? null);
   const [splitType, setSplitType] = useState<SplitType>(initial?.splitType ?? 'equal');
+  const [customOpen, setCustomOpen] = useState(false);
+  const [custom, setCustom] = useState('');
+
+  const { data: usedCategories } = useUsedCategories();
+
+  // The built-in set first, then anything this household invented, then the
+  // one currently on this expense — which may be neither, if it was typed
+  // before and every trace of it has since been edited away.
+  const categoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of [
+      ...EXPENSE_CATEGORIES.map((c) => c.value),
+      ...(usedCategories ?? []),
+      ...(category ? [category] : []),
+    ]) {
+      if (value && value !== 'Sonstiges' && !seen.has(value)) {
+        seen.add(value);
+        out.push(value);
+      }
+    }
+    return out;
+  }, [usedCategories, category]);
+
+  function applyCustomCategory() {
+    const trimmed = custom.trim();
+    if (trimmed.length > 0) setCategory(trimmed);
+    setCustom('');
+    setCustomOpen(false);
+  }
   const [items, setItems] = useState<DraftItem[]>(
     (initial?.items ?? []).map((item, index) => ({
       key: `initial-${index}`,
@@ -194,18 +225,39 @@ export function ExpenseForm({
       <View style={styles.field}>
         <Text style={styles.label}>Kategorie</Text>
         <View style={styles.chipRow}>
-          {EXPENSE_CATEGORIES.map((option) => (
+          {categoryOptions.map((option) => (
             <Chip
-              key={option.value}
-              label={option.value}
-              color={option.color}
-              active={category === option.value}
+              key={option}
+              label={option}
+              color={categoryMeta(option).color}
+              active={category === option}
               // Tapping the active chip clears it — a category is optional,
               // and there is no other way back to "none".
-              onPress={() => setCategory((prev) => (prev === option.value ? null : option.value))}
+              onPress={() => setCategory((prev) => (prev === option ? null : option))}
             />
           ))}
+          <Chip
+            label={customOpen ? 'Abbrechen' : '+ Eigene'}
+            active={customOpen}
+            onPress={() => {
+              setCustomOpen((open) => !open);
+              setCustom('');
+            }}
+          />
         </View>
+
+        {customOpen ? (
+          <TextField
+            value={custom}
+            onChangeText={setCustom}
+            placeholder="z. B. Tierarzt"
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={applyCustomCategory}
+            onBlur={applyCustomCategory}
+            hint="Wird gespeichert und steht beim nächsten Mal als Chip bereit."
+          />
+        ) : null}
       </View>
 
       <View style={styles.field}>

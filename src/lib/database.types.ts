@@ -45,12 +45,27 @@ export type RecurringExpenseUnit = 'week' | 'month';
 export type ScheduleMode = 'fixed' | 'after_completion';
 export type AssignmentMode = 'fixed' | 'rotating';
 export type AgendaStatus = 'overdue' | 'due_today' | 'due_soon' | 'upcoming';
-export type LocationKind = 'room' | 'shelf' | 'box' | 'fridge' | 'freezer' | 'cabinet' | 'other';
+/**
+ * Free text since migration 0022 — the CHECK is only a length bound now.
+ * The listed values are the ones with their own icon; `(string & {})` keeps
+ * them as autocomplete suggestions without closing the set.
+ */
+export type LocationKind =
+  | 'room'
+  | 'shelf'
+  | 'box'
+  | 'fridge'
+  | 'freezer'
+  | 'cabinet'
+  | 'other'
+  | (string & {});
 export type ProductUnit = 'piece' | 'g' | 'kg' | 'ml' | 'l' | 'pack';
 export type MovementReason = 'scan_in' | 'manual_adjust' | 'consume' | 'move' | 'correction' | 'initial';
-export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock';
+export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock' | 'event';
 /** 'restock' rows are written by generate_restock_todos(), not by a person. */
 export type TodoSource = 'manual' | 'restock';
+/** A Jahrestag or Geburtstag is an event that must repeat yearly. */
+export type EventKind = 'event' | 'anniversary' | 'birthday';
 export type Platform = 'ios' | 'android';
 
 // ---------------------------------------------------------------------------
@@ -189,6 +204,33 @@ export type TodoRow = {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type EventRow = {
+  id: string;
+  household_id: string;
+  kind: EventKind;
+  title: string;
+  description: string | null;
+  place: string | null;
+  starts_on: string;
+  /** NULL = ganztägig. Display only; reminders fire on the day. */
+  starts_at: string | null;
+  ends_on: string | null;
+  repeat_yearly: boolean;
+  remind_days_before: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** v_event_agenda: the row plus its next occurrence and the counters. */
+export type EventAgendaRow = Omit<EventRow, 'created_at' | 'updated_at'> & {
+  next_on: string;
+  days_until: number;
+  /** Which anniversary the next occurrence is; null for one-offs. */
+  years: number | null;
+  days_since_start: number;
 }
 
 export type HouseRuleRow = {
@@ -375,6 +417,7 @@ export type SystemHeartbeatRow = {
   restock_notifications_sent: number;
   recurring_expenses_generated: number;
   restock_todos_synced: number;
+  event_notifications_sent: number;
   duration_ms: number | null;
   error: string | null;
 }
@@ -547,6 +590,7 @@ export type Database = {
       >;
       todos: Table<TodoRow, Stamps | 'is_done' | 'position' | 'source' | 'product_id'>;
       house_rules: Table<HouseRuleRow, Stamps | 'position'>;
+      events: Table<EventRow, Stamps | 'kind' | 'repeat_yearly' | 'remind_days_before'>;
       cleaning_areas: Table<CleaningAreaRow, Stamps | 'icon' | 'color' | 'sort_order'>;
       cleaning_tasks: Table<
         CleaningTaskRow,
@@ -581,11 +625,13 @@ export type Database = {
         | 'restock_notifications_sent'
         | 'recurring_expenses_generated'
         | 'restock_todos_synced'
+        | 'event_notifications_sent'
       >;
     };
     Views: {
       v_household_balances: View<HouseholdBalanceRow>;
       v_cleaning_agenda: View<CleaningAgendaRow>;
+      v_event_agenda: View<EventAgendaRow>;
       v_cleaning_stats: View<CleaningStatsRow>;
       v_location_paths: View<LocationPathRow>;
       v_inventory_totals: View<InventoryTotalRow>;
@@ -663,6 +709,16 @@ export type Database = {
         /** `p_quantity` null moves the whole lot. */
         Args: { p_item_id: string; p_location_id?: string | null; p_quantity?: number | null };
         Returns: InventoryItemRow;
+      };
+      update_location: {
+        Args: {
+          p_location_id: string;
+          p_name?: string | null;
+          p_kind?: string | null;
+          p_parent_id?: string | null;
+          p_clear_parent?: boolean;
+        };
+        Returns: StorageLocationRow;
       };
       house_rules_move: {
         Args: { p_rule_id: string; p_direction: 'up' | 'down' };

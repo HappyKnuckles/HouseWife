@@ -15,6 +15,7 @@ import {
   useItemsForProduct,
   useLocations,
   useMoveItem,
+  useProductCategories,
   useSetRestockThreshold,
   useUpdateProduct,
 } from '../../../features/inventory/hooks';
@@ -88,6 +89,7 @@ export default function ProductDetailScreen() {
   const updateProduct = useUpdateProduct();
   const moveItem = useMoveItem();
   const adjust = useAdjustQuantity();
+  const { data: categories } = useProductCategories();
 
   const product = useMemo(() => totals?.find((t) => t.product_id === id), [totals, id]);
 
@@ -100,6 +102,7 @@ export default function ProductDetailScreen() {
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [draftBrand, setDraftBrand] = useState('');
+  const [draftCategory, setDraftCategory] = useState('');
   /** Which lot's location picker is open; null = none. */
   const [movingLot, setMovingLot] = useState<string | null>(null);
   /** How much of the open lot to move. Empty means all of it. */
@@ -140,13 +143,18 @@ export default function ProductDetailScreen() {
   function startEditing() {
     setDraftName(product?.name ?? '');
     setDraftBrand(product?.brand ?? '');
+    setDraftCategory(product?.category ?? '');
     setEditing(true);
   }
 
   async function saveEdits() {
     await updateProduct.mutateAsync({
       productId: id,
-      patch: { name: draftName.trim(), brand: draftBrand.trim() || null },
+      patch: {
+        name: draftName.trim(),
+        brand: draftBrand.trim() || null,
+        category: draftCategory.trim() || null,
+      },
     });
     setEditing(false);
   }
@@ -165,6 +173,26 @@ export default function ProductDetailScreen() {
               onChangeText={setDraftBrand}
               placeholder="z. B. Aldi"
             />
+
+            <Text style={styles.rowHint}>Kategorie</Text>
+            <View style={styles.chipRow}>
+              {(categories ?? []).map((option) => (
+                <Chip
+                  key={option}
+                  label={option}
+                  active={draftCategory.trim() === option}
+                  // Tapping the active chip clears it — a category is optional.
+                  onPress={() => setDraftCategory((prev) => (prev === option ? '' : option))}
+                />
+              ))}
+            </View>
+            <TextField
+              value={draftCategory}
+              onChangeText={setDraftCategory}
+              placeholder="z. B. Backen"
+              hint="Frei wählbar. Schon benutzte stehen oben als Chip."
+            />
+
             <View style={styles.editActions}>
               <Button
                 label="Abbrechen"
@@ -193,7 +221,8 @@ export default function ProductDetailScreen() {
             <View style={styles.heroText}>
               <Text style={styles.name}>{product.name}</Text>
               <Text style={styles.meta}>
-                {[product.brand, product.barcode].filter(Boolean).join(' · ') || 'Ohne Marke'}
+                {[product.brand, product.category, product.barcode].filter(Boolean).join(' · ') ||
+                  'Ohne Marke'}
               </Text>
             </View>
             <Text style={styles.total}>{formatQuantity(product.total_quantity)}</Text>

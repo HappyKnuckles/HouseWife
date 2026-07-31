@@ -208,3 +208,20 @@ export function useDeleteItem() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 }
+
+export function useUpdateLocation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Parameters<typeof api.updateLocation>[1] }) =>
+      api.updateLocation(id, patch),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
+export function useProductCategories() {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['inventory', 'categories', householdId],
+    queryFn: () => api.fetchProductCategories(householdId),
+  });
+}

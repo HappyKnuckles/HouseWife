@@ -169,3 +169,12 @@ export function useSignedReceiptUrl(storagePath: string | null | undefined) {
     staleTime: 50 * 60 * 1000,
   });
 }
+
+/** Categories this household has used before, for the picker to offer. */
+export function useUsedCategories() {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['expenses', 'categories', householdId],
+    queryFn: () => api.fetchUsedCategories(householdId),
+  });
+}

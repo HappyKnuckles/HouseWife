@@ -466,6 +466,71 @@ await runRestock();
 r = await as(USER_A, `select count(*)::int n from public.todos where source='restock'`);
 ok('ticking it off lets the next one be created', r.rows[0].n === 2, `got ${r.rows[0].n}`);
 
+section('events');
+await as(USER_A, `insert into public.events (household_id, kind, title, starts_on, repeat_yearly, created_by)
+                  values ('${HH}', 'anniversary', 'Zusammen', current_date - 800, true, '${USER_A}')`);
+await as(USER_A, `insert into public.events (household_id, title, place, starts_on, starts_at, created_by)
+                  values ('${HH}', 'Marie kommt vorbei', 'bei uns', current_date + 3, '18:30', '${USER_A}')`);
+
+r = await as(USER_A, `select title, days_until, days_since_start, years, next_on::text
+                    from public.v_event_agenda where kind='anniversary'`);
+ok('an anniversary counts the days since it started',
+   r.rows[0].days_since_start === 800, JSON.stringify(r.rows[0]));
+ok('...and its next occurrence is in the future',
+   r.rows[0].days_until >= 0 && r.rows[0].days_until <= 366, JSON.stringify(r.rows[0]));
+ok('...on its third year', r.rows[0].years === 3, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select days_until from public.v_event_agenda where title='Marie kommt vorbei'`);
+ok('a one-off event counts down to its date', r.rows[0].days_until === 3, JSON.stringify(r.rows[0]));
+
+// 29 February: the next occurrence has to land on a day that exists.
+r = await as(USER_A, `select public.event_next_occurrence('2024-02-29', true, '2027-01-10')::text as d`);
+ok('a 29 February anniversary clamps to the 28th in a common year',
+   r.rows[0].d === '2027-02-28', r.rows[0].d);
+r = await as(USER_A, `select public.event_next_occurrence('2024-02-29', true, '2028-01-10')::text as d`);
+ok('...and is itself again in a leap year', r.rows[0].d === '2028-02-29', r.rows[0].d);
+
+// A yearly date already past this year rolls to next year.
+r = await as(USER_A, `select public.event_next_occurrence('2000-01-05', true, '2026-07-31')::text as d`);
+ok('a yearly date that has passed rolls forward', r.rows[0].d === '2027-01-05', r.rows[0].d);
+
+err = await asExpectError(USER_A, `insert into public.events (household_id, kind, title, starts_on)
+                                  values ('${HH}', 'anniversary', 'Einmalig', current_date)`);
+ok('an anniversary must repeat', err !== null, 'non-repeating anniversary accepted');
+
+err = await asExpectError(USER_A, `insert into public.events (household_id, title, starts_on, ends_on)
+                                  values ('${HH}', 'Rückwärts', current_date, current_date - 1)`);
+ok('an event cannot end before it starts', err !== null, 'inverted range accepted');
+
+r = await as(USER_B, `select count(*)::int n from public.v_event_agenda`);
+ok('both members see the same events', r.rows[0].n === 2, `got ${r.rows[0].n}`);
+
+section('locations: renaming and re-parenting');
+r = await as(USER_A, `select id from public.storage_locations where name='Küche'`);
+const KITCHEN = r.rows[0].id;
+r = await as(USER_A, `select id from public.storage_locations where name='Vorratsschrank'`);
+const PANTRY = r.rows[0].id;
+
+r = await as(USER_A, `select name, kind from public.update_location('${PANTRY}', 'Speisekammer', 'pantry')`);
+ok('a location can be renamed and given a free-text kind',
+   r.rows[0].name === 'Speisekammer' && r.rows[0].kind === 'pantry', JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select path from public.v_location_paths where id='${PANTRY}'`);
+ok('the path picks the new name up', r.rows[0].path === 'Küche › Speisekammer', r.rows[0].path);
+
+// The move that would hang v_location_paths for good.
+err = await asExpectError(USER_A, `select public.update_location('${KITCHEN}', null, null, '${PANTRY}')`);
+ok('a location cannot be moved under its own child', err !== null, 'cycle was allowed');
+
+err = await asExpectError(USER_A, `select public.update_location('${KITCHEN}', null, null, '${KITCHEN}')`);
+ok('...nor under itself', err !== null, 'self-parent was allowed');
+
+r = await as(USER_A, `select parent_id from public.update_location('${PANTRY}', null, null, null, true)`);
+ok('clearing the parent detaches it', r.rows[0].parent_id === null, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select path from public.v_location_paths where id='${PANTRY}'`);
+ok('...and the path shortens accordingly', r.rows[0].path === 'Speisekammer', r.rows[0].path);
+
 section('house rules');
 for (const text of ['Schuhe aus', 'Müll raus am Dienstag', 'Spülmaschine ausräumen']) {
   await as(USER_A, `insert into public.house_rules (household_id, text, position, created_by)

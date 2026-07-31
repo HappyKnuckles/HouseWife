@@ -342,3 +342,25 @@ export async function deleteReceipt(receipt: ReceiptRow): Promise<void> {
   const { error } = await supabase.from('receipts').delete().eq('id', receipt.id);
   if (error) throw error;
 }
+
+/**
+ * Every category the household has actually used.
+ *
+ * Read off v_expense_category_month rather than a dedicated view or a
+ * `select distinct` (which PostgREST cannot express): the aggregate is already
+ * one row per category per month, so the result is small and the column is the
+ * one the stats screen groups by anyway. `expenses.category` is free text —
+ * EXPENSE_CATEGORIES is only what the picker *offers* — so this is what makes
+ * a category you invented once show up as a chip the next time.
+ */
+export async function fetchUsedCategories(householdId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('v_expense_category_month')
+    .select('category')
+    .eq('household_id', householdId);
+
+  if (error) throw error;
+  return [...new Set((data ?? []).map((row) => row.category).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'de'),
+  );
+}

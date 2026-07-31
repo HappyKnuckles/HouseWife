@@ -9,23 +9,10 @@ import { Chip } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
 import { useCreateLocation, useLocations } from '../../features/inventory/hooks';
+import { LOCATION_KINDS, locationIcon } from '../../features/inventory/locations';
 import { Alert } from '../../lib/alert';
-import type { LocationKind } from '../../lib/database.types';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
-
-const KIND_OPTIONS: { value: LocationKind; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { value: 'room', label: 'Raum', icon: 'home-outline' },
-  { value: 'cabinet', label: 'Schrank', icon: 'file-tray-stacked-outline' },
-  { value: 'shelf', label: 'Regal', icon: 'library-outline' },
-  { value: 'box', label: 'Kiste', icon: 'cube-outline' },
-  { value: 'fridge', label: 'Kühlschrank', icon: 'snow-outline' },
-  { value: 'freezer', label: 'Gefrierschrank', icon: 'snow-outline' },
-  { value: 'other', label: 'Sonstiges', icon: 'ellipsis-horizontal-outline' },
-];
-
-const kindIcon = (kind: LocationKind) =>
-  KIND_OPTIONS.find((k) => k.value === kind)?.icon ?? 'location-outline';
 
 /**
  * Manage storage locations: create them, and see at a glance which ones
@@ -65,7 +52,9 @@ export default function LocationsScreen() {
 
   const [composing, setComposing] = useState(false);
   const [name, setName] = useState('');
-  const [kind, setKind] = useState<LocationKind>('room');
+  const [kind, setKind] = useState('room');
+  /** Anything typed here wins over the chips — `kind` is free text now. */
+  const [customKind, setCustomKind] = useState('');
   const [parentId, setParentId] = useState<string | null>(null);
 
   if (isLoading) return <LoadingState label="Orte werden geladen…" />;
@@ -76,9 +65,10 @@ export default function LocationsScreen() {
     if (!trimmed) return;
 
     try {
-      await createLocation.mutateAsync({ name: trimmed, kind, parentId });
+      await createLocation.mutateAsync({ name: trimmed, kind: customKind.trim() || kind, parentId });
       setName('');
       setKind('room');
+      setCustomKind('');
       setParentId(null);
       setComposing(false);
     } catch (err) {
@@ -115,15 +105,24 @@ export default function LocationsScreen() {
 
           <Text style={styles.label}>Art</Text>
           <View style={styles.chipRow}>
-            {KIND_OPTIONS.map((option) => (
+            {LOCATION_KINDS.map((option) => (
               <Chip
                 key={option.value}
                 label={option.label}
-                active={kind === option.value}
-                onPress={() => setKind(option.value)}
+                active={kind === option.value && customKind.trim() === ''}
+                onPress={() => {
+                  setKind(option.value);
+                  setCustomKind('');
+                }}
               />
             ))}
           </View>
+          <TextField
+            value={customKind}
+            onChangeText={setCustomKind}
+            placeholder="oder eigene Art, z. B. Speisekammer"
+            hint="Eigene Arten bekommen ein neutrales Symbol."
+          />
 
           <Text style={styles.label}>Übergeordneter Ort (optional)</Text>
           <View style={styles.chipRow}>
@@ -160,7 +159,7 @@ export default function LocationsScreen() {
         renderItem={({ item }) => (
           <Card style={styles.row} onPress={() => router.push(`/inventar/orte/${item.id}`)}>
             <View style={styles.rowIcon}>
-              <Ionicons name={kindIcon(item.kind)} size={18} color={colors.textMuted} />
+              <Ionicons name={locationIcon(item.kind)} size={18} color={colors.textMuted} />
             </View>
             <Text style={styles.rowPath} numberOfLines={1}>
               {item.path}

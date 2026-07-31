@@ -64,8 +64,9 @@ interface PendingNotification {
   household_id: string;
   task_id?: string;
   product_id?: string;
+  event_id?: string;
   profile_id: string;
-  kind: 'due' | 'overdue' | 'restock';
+  kind: 'due' | 'overdue' | 'restock' | 'event';
   due_on: string;
   title: string;
   body: string;
@@ -79,6 +80,19 @@ interface InsertedNotification {
   body: string;
   task_id: string | null;
   product_id: string | null;
+  event_id: string | null;
+}
+
+interface DueEvent {
+  id: string;
+  kind: 'event' | 'anniversary' | 'birthday';
+  title: string;
+  place: string | null;
+  starts_at: string | null;
+  next_on: string;
+  days_until: number;
+  years: number | null;
+  remind_days_before: number;
 }
 
 interface LowStockProduct {
@@ -275,6 +289,7 @@ Deno.serve(async (req) => {
   let restockNotificationsSent = 0;
   let recurringExpensesGenerated = 0;
   let restockTodosSynced = 0;
+  let eventNotificationsSent = 0;
   let runError: string | null = null;
 
   // --------------------------------------------------------------------------
@@ -389,7 +404,73 @@ Deno.serve(async (req) => {
       }
 
       // ----------------------------------------------------------------------
-      // 2b. CLEANING
+      // 2b. TERMINE — events whose next occurrence is within their lead time.
+      //
+      // The agenda view already resolved the next occurrence of a yearly event
+      // against the server's current_date, so there is no date arithmetic to
+      // repeat (or get wrong) here — only the comparison against each event's
+      // own remind_days_before. Always both members: a Termin belongs to the
+      // household, and a Jahrestag that reminded only one of you would be
+      // worse than none.
+      // ----------------------------------------------------------------------
+      const { data: dueEvents, error: evErr } = await supabase
+        .from('v_event_agenda')
+        .select('id, kind, title, place, starts_at, next_on, days_until, years, remind_days_before')
+        .eq('household_id', household.id)
+        .gte('days_until', 0)
+        .lte('days_until', 30)
+        .returns<DueEvent[]>();
+
+      if (evErr) throw evErr;
+
+      const remindable = (dueEvents ?? []).filter((e) => e.days_until <= e.remind_days_before);
+
+      if (remindable.length > 0) {
+        const eventPending: PendingNotification[] = remindable.flatMap((e) => {
+          const when = e.days_until === 0 ? 'heute' : e.days_until === 1 ? 'morgen' : `in ${e.days_until} Tagen`;
+          const time = e.starts_at ? ` um ${e.starts_at.slice(0, 5)} Uhr` : '';
+          const place = e.place ? ` · ${e.place}` : '';
+
+          const title =
+            e.kind === 'anniversary'
+              ? `❤️ ${e.years}. ${e.title}-Jahrestag ${when}`
+              : e.kind === 'birthday'
+                ? `🎁 ${e.title} ${when}`
+                : `📅 ${e.title} ${when}`;
+
+          return memberIds.map((profileId) => ({
+            household_id: household.id,
+            event_id: e.id,
+            profile_id: profileId,
+            kind: 'event' as const,
+            // The occurrence date, not today: that way one event reminds once
+            // per person per occurrence, however many hours the cron runs in
+            // the lead-time window.
+            due_on: e.next_on,
+            title,
+            body: `${when.charAt(0).toUpperCase()}${when.slice(1)}${time}${place}.`,
+          }));
+        });
+
+        const { data: insertedEvents, error: ieErr } = await supabase
+          .from('notification_log')
+          .upsert(eventPending, {
+            onConflict: 'event_id,profile_id,kind,due_on',
+            ignoreDuplicates: true,
+          })
+          .select('id, task_id, product_id, event_id, profile_id, title, body')
+          .returns<InsertedNotification[]>();
+
+        if (ieErr) throw ieErr;
+
+        eventNotificationsSent += await deliver(supabase, insertedEvents ?? [], (n) => ({
+          type: 'event',
+          eventId: n.event_id,
+        }));
+      }
+
+      // ----------------------------------------------------------------------
+      // 2c. CLEANING
       // ----------------------------------------------------------------------
       // Over-fetch by the maximum lead time, then filter per task — each task
       // has its own remind_days_before.
@@ -529,6 +610,7 @@ Deno.serve(async (req) => {
         restock_notifications_sent: restockNotificationsSent,
         recurring_expenses_generated: recurringExpensesGenerated,
         restock_todos_synced: restockTodosSynced,
+        event_notifications_sent: eventNotificationsSent,
         duration_ms: durationMs,
         error: runError,
       })
@@ -544,6 +626,7 @@ Deno.serve(async (req) => {
       restock_notifications_sent: restockNotificationsSent,
       recurring_expenses_generated: recurringExpensesGenerated,
       restock_todos_synced: restockTodosSynced,
+      event_notifications_sent: eventNotificationsSent,
       duration_ms: durationMs,
       error: runError,
     }),

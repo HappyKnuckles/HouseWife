@@ -36,6 +36,7 @@ const TABLE_INVALIDATIONS: Record<string, Subscription> = {
 
   todos: { keys: [['todos']] },
   house_rules: { keys: [['rules']] },
+  events: { keys: [['events']] },
 
   inventory_items: { keys: [['inventory']] },
   products: { keys: [['inventory']] },

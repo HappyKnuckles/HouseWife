@@ -26,7 +26,7 @@ phones — no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        22 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        24 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
     household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
@@ -36,7 +36,7 @@ supabase/
 src/
   app/               expo-router screens — every file here is a route
   components/        domain-agnostic primitives (Button, Card, Screen, …)
-  features/          expenses · todos · cleaning · inventory · household · auth
+  features/          expenses · todos · cleaning · inventory · events · rules · household · auth
   lib/               typed Supabase client, realtime, notifications, formatting, theme
 docs/data-model.md   the design write-up
 ```
@@ -331,7 +331,7 @@ npm run test:db
 ```sql
 select ran_at, households_scanned, tasks_due, notifications_sent,
        restock_notifications_sent, recurring_expenses_generated,
-       restock_todos_synced, duration_ms, error
+       restock_todos_synced, event_notifications_sent, duration_ms, error
 from public.system_heartbeat
 order by ran_at desc
 limit 24;
@@ -511,6 +511,55 @@ changed by another route.
 `created_by` stays NULL on a generated row — nobody wrote it, and putting one of
 the two members' faces on it would be a small lie. The to-dos screen marks them
 with a cart icon and links through to the product instead.
+
+### Termine, Jahrestage and Geburtstage are one table
+
+"Wann kommt Marie vorbei?" and "seit wann sind wir zusammen?" are the same
+shape of thing — a named date with a place and a note — so `events` has a
+`kind` rather than there being three tables. The CHECK enforces the one real
+difference: an anniversary or birthday that does not repeat yearly is not one.
+
+Dates, not timestamps. Every scheduled thing in this schema — `next_due_on`,
+`notification_log.due_on` — is a household-local date, because the reminder
+cron compares against the household's own local day and never does UTC
+arithmetic. A `timestamptz` here would be the single exception and would need
+converting back at every comparison. Time of day is a separate optional column:
+display only, reminders fire on the day.
+
+`event_next_occurrence()` resolves a yearly date to this year's instance or
+next year's, clamping 29 February to the 28th in a common year. `v_event_agenda`
+wraps it and adds `days_until`, `years` and `days_since_start`, all computed
+against the server's `current_date` — so both phones agree on the countdown and
+a device with a wrong clock cannot invent an anniversary.
+
+Reminders reuse `notification_log` again, keyed on the *occurrence* date rather
+than today, so one event reminds once per person per occurrence however many
+hours the cron runs inside the lead-time window.
+
+### Categories are free text, everywhere
+
+`expenses.category` and `products.category` are both plain text with no enum
+and no lookup table. `EXPENSE_CATEGORIES` is what the picker *offers*; the form
+also lists every category the household has actually used (read off
+`v_expense_category_month`, which is already grouped by exactly that) and has a
+`+ Eigene` field for a new one. Adding a category never needs a migration, and
+the stats screen falls back to a neutral icon for anything unlisted.
+
+### Places: free-text kinds, and the cycle guard
+
+`storage_locations.kind` was a CHECK over seven values. It only ever picked an
+icon, so a "Speisekammer" was impossible for no reason; it is free text now,
+with the known values keeping their icons and anything else falling back to a
+pin.
+
+Renaming and re-parenting go through `update_location()` rather than a plain
+update, for one reason: `parent_id` is a self-reference, so making a location
+its own grandparent satisfies every constraint on the table and then hangs the
+recursive CTE behind `v_location_paths` — taking the Orte screen with it,
+including the screen you would need to undo it. The RPC walks up from the
+proposed parent and refuses if it arrives back at the location. The picker also
+hides the location's own subtree, so the refusal is a backstop rather than the
+first thing you meet.
 
 ### Moving stock merges, and splits
 

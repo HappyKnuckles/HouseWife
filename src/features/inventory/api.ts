@@ -400,3 +400,44 @@ export async function deleteItem(itemId: string): Promise<void> {
   const { error } = await supabase.from('inventory_items').delete().eq('id', itemId);
   if (error) throw error;
 }
+
+/**
+ * Renames / re-types / re-parents a location.
+ *
+ * An RPC only for the cycle check: parent_id is a plain self-reference, so
+ * making a location its own grandparent passes every constraint on the table
+ * and then hangs the recursive CTE behind v_location_paths — taking the Orte
+ * screen with it, including the screen you would need to undo it. See
+ * migration 0022.
+ *
+ * NULL means "leave alone", so detaching from a parent has its own flag.
+ */
+export async function updateLocation(
+  locationId: string,
+  patch: { name?: string; kind?: string; parentId?: string | null; clearParent?: boolean },
+): Promise<StorageLocationRow> {
+  const { data, error } = await supabase.rpc('update_location', {
+    p_location_id: locationId,
+    p_name: patch.name ?? null,
+    p_kind: patch.kind ?? null,
+    p_parent_id: patch.parentId ?? null,
+    p_clear_parent: patch.clearParent ?? false,
+  });
+
+  if (error) throw error;
+  return data as StorageLocationRow;
+}
+
+/** Product categories this household has used, for the picker to offer. */
+export async function fetchProductCategories(householdId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('v_inventory_totals')
+    .select('category')
+    .eq('household_id', householdId)
+    .not('category', 'is', null);
+
+  if (error) throw error;
+  return [...new Set((data ?? []).map((row) => row.category).filter((c): c is string => !!c))].sort(
+    (a, b) => a.localeCompare(b, 'de'),
+  );
+}
