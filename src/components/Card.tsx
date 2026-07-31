@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Pressable, Text, View, type ViewStyle } from 'react-native';
+import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { radius, shadow, spacing, typography } from '../lib/theme';
 import { useThemedStyles } from '../lib/theme-context';
@@ -10,7 +10,7 @@ export function Card({
   onPress,
 }: {
   children: ReactNode;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   onPress?: () => void;
 }) {
   const styles = useThemedStyles((colors) => ({

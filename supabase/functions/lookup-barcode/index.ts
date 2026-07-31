@@ -23,6 +23,7 @@
  * change and no client change.
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 
 /** What every provider must return. Mirrors src/features/inventory/types.ts. */
@@ -111,13 +112,12 @@ function activeProviders(): BarcodeProvider[] {
   return providers.length > 0 ? providers : [nullProvider];
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+const json = jsonResponse;
 
 Deno.serve(async (req) => {
+  const preflight = handlePreflight(req);
+  if (preflight) return preflight;
+
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
 
   // Authenticate the caller. This function is deployed *with* JWT verification,

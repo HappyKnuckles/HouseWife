@@ -1,7 +1,7 @@
 /**
  * household-tick — the scheduled heartbeat of the whole system.
  *
- * Runs hourly via pg_cron + pg_net (see README). Two jobs, in this order:
+ * Runs hourly via pg_cron + pg_net (see README). Three jobs, in this order:
  *
  *   1. KEEP-ALIVE. A read and a write, both through PostgREST, executed before
  *      anything else and in their own try/catch. Supabase pauses free projects
@@ -11,8 +11,14 @@
  *      unambiguously is activity. It happens on every run, whether or not any
  *      reminder is due, and even if every household's reminder logic throws.
  *
- *   2. REMINDERS. Push notifications for cleaning tasks that are due or
- *      overdue, so they fire with the app closed.
+ *   2. RECURRING EXPENSES. Turns any due recurring_expenses template (rent,
+ *      Strom, …) into a real expense via generate_due_recurring_expenses().
+ *      Also unconditional — a bill's due date does not depend on a
+ *      household's chosen reminder hour.
+ *
+ *   3. REMINDERS, per household at its own local reminder_hour: staples that
+ *      have fallen to or below their restock threshold, then cleaning tasks
+ *      that are due or overdue. Both fire with the app closed.
  *
  * Hourly rather than daily so each household is reminded at its own local
  * reminder_hour without any UTC/DST arithmetic — and so the keep-alive gets 24
@@ -51,12 +57,31 @@ interface Task {
 
 interface PendingNotification {
   household_id: string;
-  task_id: string;
+  task_id?: string;
+  product_id?: string;
   profile_id: string;
-  kind: 'due' | 'overdue';
+  kind: 'due' | 'overdue' | 'restock';
   due_on: string;
   title: string;
   body: string;
+}
+
+/** A row that survived the notification_log dedupe gate and is ready to send. */
+interface InsertedNotification {
+  id: string;
+  profile_id: string;
+  title: string;
+  body: string;
+  task_id: string | null;
+  product_id: string | null;
+}
+
+interface LowStockProduct {
+  product_id: string;
+  name: string;
+  total_quantity: number;
+  restock_min_quantity: number;
+  unit: string;
 }
 
 /** "Now" in a household's own timezone, as a plain date plus the local hour. */
@@ -112,6 +137,100 @@ function buildMessage(task: Task, kind: 'due' | 'overdue', today: string) {
   };
 }
 
+/**
+ * Sends already-logged notifications and reconciles the results.
+ *
+ * Shared by the cleaning and restock passes rather than written twice: the
+ * ticket → receipt → dead-token handling is the fiddly part of Expo push, and
+ * two copies would drift the moment one of them is fixed. Callers differ only
+ * in the `data` payload, which is what the app taps through on.
+ *
+ * Returns how many pushes Expo accepted.
+ */
+async function deliver(
+  supabase: ReturnType<typeof serviceClient>,
+  inserted: InsertedNotification[],
+  dataFor: (n: InsertedNotification) => Record<string, unknown>,
+): Promise<number> {
+  if (inserted.length === 0) return 0;
+
+  const profileIds = [...new Set(inserted.map((n) => n.profile_id))];
+
+  const { data: tokens, error: tokErr } = await supabase
+    .from('push_tokens')
+    .select('id, profile_id, token')
+    .in('profile_id', profileIds)
+    .is('disabled_at', null);
+
+  if (tokErr) throw tokErr;
+  if (!tokens || tokens.length === 0) return 0;
+
+  const messages: ExpoMessage[] = [];
+  const meta: { notificationId: string; tokenId: string }[] = [];
+
+  for (const n of inserted) {
+    for (const tok of tokens.filter((t) => t.profile_id === n.profile_id)) {
+      messages.push({
+        to: tok.token as string,
+        title: n.title,
+        body: n.body,
+        sound: 'default',
+        priority: 'high',
+        channelId: ANDROID_CHANNEL,
+        data: { ...dataFor(n), notificationId: n.id },
+      });
+      meta.push({ notificationId: n.id, tokenId: tok.id as string });
+    }
+  }
+
+  if (messages.length === 0) return 0;
+
+  const tickets = await sendPushNotifications(messages);
+
+  const receiptRows: Record<string, unknown>[] = [];
+  const deadTokenIds: string[] = [];
+  const ticketByNotification = new Map<string, string>();
+  let sent = 0;
+
+  tickets.forEach((ticket, i) => {
+    const { notificationId, tokenId } = meta[i];
+
+    if (ticket.status === 'ok') {
+      sent++;
+      receiptRows.push({ ticket_id: ticket.id, notification_id: notificationId, token_id: tokenId });
+      if (!ticketByNotification.has(notificationId)) {
+        ticketByNotification.set(notificationId, ticket.id);
+      }
+      return;
+    }
+
+    console.error('push ticket error:', ticket.message);
+    // Expo often reports a dead token straight away; no need to wait for
+    // the receipt pass to stop using it.
+    if (isDeadToken(ticket)) deadTokenIds.push(tokenId);
+  });
+
+  if (receiptRows.length > 0) {
+    await supabase.from('push_receipts').insert(receiptRows);
+  }
+
+  for (const [notificationId, ticketId] of ticketByNotification) {
+    await supabase
+      .from('notification_log')
+      .update({ expo_ticket_id: ticketId })
+      .eq('id', notificationId);
+  }
+
+  if (deadTokenIds.length > 0) {
+    await supabase
+      .from('push_tokens')
+      .update({ disabled_at: new Date().toISOString() })
+      .in('id', deadTokenIds);
+  }
+
+  return sent;
+}
+
 Deno.serve(async (req) => {
   const unauthorized = rejectUnauthorized(req);
   if (unauthorized) return unauthorized;
@@ -148,7 +267,24 @@ Deno.serve(async (req) => {
   let householdsScanned = 0;
   let tasksDue = 0;
   let notificationsSent = 0;
+  let restockNotificationsSent = 0;
+  let recurringExpensesGenerated = 0;
   let runError: string | null = null;
+
+  // --------------------------------------------------------------------------
+  // 1.5 RECURRING EXPENSES — also unconditional (not gated on reminder_hour):
+  // a bill is due on its date regardless of which hour the household likes to
+  // be reminded at. Isolated in its own try/catch, same reasoning as the
+  // keep-alive: one household's broken template must not stop reminders for
+  // everyone else.
+  // --------------------------------------------------------------------------
+  try {
+    const { data, error } = await supabase.rpc('generate_due_recurring_expenses');
+    if (error) throw error;
+    recurringExpensesGenerated = data ?? 0;
+  } catch (err) {
+    console.error('recurring expense generation failed:', err);
+  }
 
   try {
     // The keep-alive read. Needed by the reminder logic anyway, which is what
@@ -169,6 +305,72 @@ Deno.serve(async (req) => {
       const { date: today, hour } = localNow(household.timezone ?? 'Europe/Berlin');
       if (!force && hour !== household.reminder_hour) continue;
 
+      const { data: members, error: mErr } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('household_id', household.id);
+
+      if (mErr) throw mErr;
+      const memberIds = (members ?? []).map((m) => m.id as string);
+
+      // ----------------------------------------------------------------------
+      // 2a. RESTOCK — staples at or below their threshold.
+      //
+      // Runs before the cleaning pass and shares none of its early exits, so a
+      // household with no chores due still gets told it is out of toilet paper.
+      // Always goes to both members: a staple belongs to the household, and
+      // there is nobody it could be "assigned" to.
+      // ----------------------------------------------------------------------
+      const { data: lowStock, error: lowErr } = await supabase
+        .from('v_inventory_totals')
+        .select('product_id, name, total_quantity, restock_min_quantity, unit')
+        .eq('household_id', household.id)
+        .eq('is_low', true)
+        .returns<LowStockProduct[]>();
+
+      if (lowErr) throw lowErr;
+
+      if (lowStock && lowStock.length > 0) {
+        const restockPending: PendingNotification[] = lowStock.flatMap((p) => {
+          const empty = Number(p.total_quantity) <= 0;
+          const title = empty ? `🛒 ${p.name} ist alle` : `🛒 ${p.name} wird knapp`;
+          const body = empty
+            ? 'Nichts mehr da — auf die Einkaufsliste?'
+            : `Nur noch ${Number(p.total_quantity)} ${p.unit} übrig.`;
+
+          return memberIds.map((profileId) => ({
+            household_id: household.id,
+            product_id: p.product_id,
+            profile_id: profileId,
+            kind: 'restock' as const,
+            // The household-local date, so a staple that stays empty nudges
+            // at most once a day per person instead of every hour.
+            due_on: today,
+            title,
+            body,
+          }));
+        });
+
+        const { data: insertedRestock, error: rErr } = await supabase
+          .from('notification_log')
+          .upsert(restockPending, {
+            onConflict: 'product_id,profile_id,kind,due_on',
+            ignoreDuplicates: true,
+          })
+          .select('id, task_id, product_id, profile_id, title, body')
+          .returns<InsertedNotification[]>();
+
+        if (rErr) throw rErr;
+
+        restockNotificationsSent += await deliver(supabase, insertedRestock ?? [], (n) => ({
+          type: 'restock',
+          productId: n.product_id,
+        }));
+      }
+
+      // ----------------------------------------------------------------------
+      // 2b. CLEANING
+      // ----------------------------------------------------------------------
       // Over-fetch by the maximum lead time, then filter per task — each task
       // has its own remind_days_before.
       const { data: tasks, error: tErr } = await supabase
@@ -187,14 +389,6 @@ Deno.serve(async (req) => {
       );
       if (relevant.length === 0) continue;
       tasksDue += relevant.length;
-
-      const { data: members, error: mErr } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('household_id', household.id);
-
-      if (mErr) throw mErr;
-      const memberIds = (members ?? []).map((m) => m.id as string);
 
       const pending: PendingNotification[] = [];
 
@@ -236,83 +430,15 @@ Deno.serve(async (req) => {
           onConflict: 'task_id,profile_id,kind,due_on',
           ignoreDuplicates: true,
         })
-        .select('id, task_id, profile_id, title, body');
+        .select('id, task_id, product_id, profile_id, title, body')
+        .returns<InsertedNotification[]>();
 
       if (nErr) throw nErr;
-      if (!inserted || inserted.length === 0) continue;
 
-      const profileIds = [...new Set(inserted.map((n) => n.profile_id as string))];
-
-      const { data: tokens, error: tokErr } = await supabase
-        .from('push_tokens')
-        .select('id, profile_id, token')
-        .in('profile_id', profileIds)
-        .is('disabled_at', null);
-
-      if (tokErr) throw tokErr;
-      if (!tokens || tokens.length === 0) continue;
-
-      const messages: ExpoMessage[] = [];
-      const meta: { notificationId: string; tokenId: string }[] = [];
-
-      for (const n of inserted) {
-        for (const tok of tokens.filter((t) => t.profile_id === n.profile_id)) {
-          messages.push({
-            to: tok.token as string,
-            title: n.title as string,
-            body: n.body as string,
-            sound: 'default',
-            priority: 'high',
-            channelId: ANDROID_CHANNEL,
-            data: { type: 'cleaning_task', taskId: n.task_id, notificationId: n.id },
-          });
-          meta.push({ notificationId: n.id as string, tokenId: tok.id as string });
-        }
-      }
-
-      if (messages.length === 0) continue;
-
-      const tickets = await sendPushNotifications(messages);
-
-      const receiptRows: Record<string, unknown>[] = [];
-      const deadTokenIds: string[] = [];
-      const ticketByNotification = new Map<string, string>();
-
-      tickets.forEach((ticket, i) => {
-        const { notificationId, tokenId } = meta[i];
-
-        if (ticket.status === 'ok') {
-          notificationsSent++;
-          receiptRows.push({ ticket_id: ticket.id, notification_id: notificationId, token_id: tokenId });
-          if (!ticketByNotification.has(notificationId)) {
-            ticketByNotification.set(notificationId, ticket.id);
-          }
-          return;
-        }
-
-        console.error('push ticket error:', ticket.message);
-        // Expo often reports a dead token straight away; no need to wait for
-        // the receipt pass to stop using it.
-        if (isDeadToken(ticket)) deadTokenIds.push(tokenId);
-      });
-
-      if (receiptRows.length > 0) {
-        await supabase.from('push_receipts').insert(receiptRows);
-      }
-
-      for (const [notificationId, ticketId] of ticketByNotification) {
-        await supabase
-          .from('notification_log')
-          .update({ expo_ticket_id: ticketId })
-          .eq('id', notificationId);
-      }
-
-      if (deadTokenIds.length > 0) {
-        await supabase
-          .from('push_tokens')
-          .update({ disabled_at: new Date().toISOString() })
-          .in('id', deadTokenIds);
-      }
+      notificationsSent += await deliver(supabase, inserted ?? [], (n) => ({
+        type: 'cleaning_task',
+        taskId: n.task_id,
+      }));
     }
 
     // ------------------------------------------------------------------------
@@ -380,6 +506,8 @@ Deno.serve(async (req) => {
         households_scanned: householdsScanned,
         tasks_due: tasksDue,
         notifications_sent: notificationsSent,
+        restock_notifications_sent: restockNotificationsSent,
+        recurring_expenses_generated: recurringExpensesGenerated,
         duration_ms: durationMs,
         error: runError,
       })
@@ -392,6 +520,8 @@ Deno.serve(async (req) => {
       households_scanned: householdsScanned,
       tasks_due: tasksDue,
       notifications_sent: notificationsSent,
+      restock_notifications_sent: restockNotificationsSent,
+      recurring_expenses_generated: recurringExpensesGenerated,
       duration_ms: durationMs,
       error: runError,
     }),

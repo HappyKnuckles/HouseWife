@@ -32,6 +32,7 @@ const TABLE_INVALIDATIONS: Record<string, Subscription> = {
   expense_shares: { keys: [['expenses']] },
   receipts: { keys: [['expenses']] },
   settlements: { keys: [['expenses']] },
+  recurring_expenses: { keys: [['expenses']] },
 
   todos: { keys: [['todos']] },
 

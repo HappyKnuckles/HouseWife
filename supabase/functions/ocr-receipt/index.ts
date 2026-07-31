@@ -13,6 +13,7 @@
  * and flags them with source = 'ocr'.
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 
 /** Mirrors src/features/expenses/ocr.ts on the client. */
@@ -52,13 +53,12 @@ function activeProvider(): ReceiptOcrProvider {
   return PROVIDERS[Deno.env.get('OCR_PROVIDER') ?? 'noop'] ?? noopProvider;
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
+const json = jsonResponse;
 
 Deno.serve(async (req) => {
+  const preflight = handlePreflight(req);
+  if (preflight) return preflight;
+
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
 
   const authHeader = req.headers.get('Authorization') ?? '';

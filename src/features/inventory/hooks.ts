@@ -117,6 +117,39 @@ export function useScanIn() {
   });
 }
 
+/**
+ * Debounced-by-keystroke product search for the manual-add typeahead.
+ *
+ * `enabled` on a 2-character minimum rather than a timer: TanStack already
+ * dedupes and caches per query string, so typing "Meh" → "Mehl" costs one
+ * request per distinct prefix and replays instantly on backspace.
+ */
+export function useProductSearch(query: string) {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['inventory', 'product-search', householdId, query.trim().toLowerCase()],
+    queryFn: () => api.searchProducts(householdId, query),
+    enabled: query.trim().length >= 2,
+  });
+}
+
+export function useProduct(productId: string | null) {
+  return useQuery({
+    queryKey: ['inventory', 'product', productId],
+    queryFn: () => api.fetchProduct(productId!),
+    enabled: !!productId,
+  });
+}
+
+export function useSetRestockThreshold() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ productId, threshold }: { productId: string; threshold: number | null }) =>
+      api.setRestockThreshold(productId, threshold),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
 export function useAdjustQuantity() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -129,6 +162,32 @@ export function useAdjustQuantity() {
       delta: number;
       reason?: MovementReason;
     }) => api.adjustQuantity(itemId, delta, reason),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
+export function useUpdateProduct() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ productId, patch }: { productId: string; patch: Parameters<typeof api.updateProduct>[1] }) =>
+      api.updateProduct(productId, patch),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
+export function useMoveItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      itemId,
+      locationId,
+      quantity,
+    }: {
+      itemId: string;
+      locationId: string | null;
+      /** Omitted moves the whole lot. */
+      quantity?: number | null;
+    }) => api.moveItem(itemId, locationId, quantity),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 }

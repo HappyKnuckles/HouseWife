@@ -35,6 +35,10 @@ yarn-error.*
 .env*.local
 !.env.example
 
+# per-profile real credentials (see env-profiles/*.env.example)
+env-profiles/*.env
+!env-profiles/*.env.example
+
 # typescript
 *.tsbuildinfo
 

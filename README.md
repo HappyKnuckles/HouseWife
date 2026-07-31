@@ -26,19 +26,28 @@ phones — no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        13 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        19 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
-    household-tick/  hourly cron: cleaning reminders + keep-alive
+    household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
     ocr-receipt/     receipt OCR interface + no-op provider
   cron/schedule.sql  one-time pg_cron setup
   tests/             schema behaviour tests against a real Postgres
-app/                 expo-router screens
 src/
-  lib/               typed Supabase client, realtime, notifications, formatting, theme
+  app/               expo-router screens — every file here is a route
+  components/        domain-agnostic primitives (Button, Card, Screen, …)
   features/          expenses · todos · cleaning · inventory · household · auth
+  lib/               typed Supabase client, realtime, notifications, formatting, theme
 docs/data-model.md   the design write-up
 ```
+
+Expo Router picks `src/app` over a top-level `app/` automatically — no config, and it
+says so on start (*"Using src/app as the root directory for Expo Router"*). Files
+under `src/app` are routes and nothing else: adding `src/app/ExpenseForm.tsx` would
+create a navigable `/ExpenseForm`. Shared UI therefore lives one level up, split by
+reach rather than by being UI — `src/components/` knows nothing about the domain and
+would drop into another app unchanged, while `src/features/<domain>/components/` sits
+next to the `api.ts` and `hooks.ts` it changes together with.
 
 ---
 
@@ -147,23 +156,82 @@ npx supabase secrets set OCR_PROVIDER=noop                 # no real OCR provide
 
 ### 6. Schedule the reminder / keep-alive job
 
-Open `supabase/cron/schedule.sql`, replace `<PROJECT_REF>` and `<CRON_SECRET>`
-with your values, and run it in the **SQL Editor**. It enables `pg_cron` and
-`pg_net` and schedules `household-tick` **hourly**.
+Fill your project ref and `CRON_SECRET` into `supabase/cron/schedule.sql`, then:
+
+```bash
+npx supabase db query --linked -f supabase/cron/schedule.sql
+```
+
+(or paste it into the **SQL Editor**). It enables `pg_cron` and `pg_net`, stores
+the secret in Vault, and schedules `household-tick` **hourly**. Re-running it is
+safe — the job is unscheduled first and the Vault secret is updated in place.
+
+The secret goes in Vault rather than `alter database … set app.cron_secret`,
+which is the more obvious way to keep it out of `cron.job`: a custom GUC is a
+placeholder until an extension claims its prefix, and Postgres wants superuser
+to set a placeholder per-database. Supabase's `postgres` role owns the database
+but is not a superuser, so that route dead-ends at
+`42501: permission denied to set parameter`.
 
 Hourly rather than daily for two reasons: each household is reminded at its own
 local `reminder_hour` without any UTC/DST arithmetic, and the keep-alive gets 24
 chances a day instead of one.
 
+The secret must match `supabase secrets set CRON_SECRET=…` byte for byte — no
+surrounding quotes, no trailing space. A mismatch fails the way a wrong secret
+always does: `cron.job_run_details` reports the POST as *succeeded* (pg_net did
+send the request), the function answers 401, and `system_heartbeat` simply stays
+empty. So verify with the heartbeat, not with the job log:
+
+```sql
+select ran_at, households_scanned, notifications_sent from public.system_heartbeat
+order by ran_at desc limit 5;
+```
+
+No new row within an hour of scheduling means the job is not reaching the
+function.
+
 ### 7. Run it
 
+There is no sign-up screen — the app has exactly two fixed accounts, and signing in
+is just picking which one you are. Which two people depends on an **env profile**:
+
 ```bash
-cp .env.example .env      # then fill in URL + anon key
+cp .env.example .env                                    # fill in URL + anon key
+cp env-profiles/prod.env.example env-profiles/prod.env   # fill in your real names/passwords
+cp env-profiles/dev.env.example env-profiles/dev.env     # placeholders (test1/test2) work as-is
+
+npm run env:prod   # or: npm run env:dev
+```
+
+`dev` and `prod` are the **same Supabase project** — no second backend to stand up —
+but `dev`'s two accounts get their own household (`Testhaushalt` by default), and RLS
+means that household can never see or touch the real one's rows. Switch profiles any
+time with `npm run env:dev` / `npm run env:prod`, then restart Metro.
+
+Provision whichever pair is currently active (safe to re-run — a no-op once it's done):
+
+```bash
+# PowerShell
+$env:SUPABASE_SERVICE_ROLE_KEY = "..."   # Project Settings → API → service_role — never put this in a file
+npm run seed:users
+```
+
+```bash
+# bash
+SUPABASE_SERVICE_ROLE_KEY=... npm run seed:users
+```
+
+This creates both accounts (`auth.admin.createUser` with `email_confirm: true`, so
+the addresses never need to receive real mail), puts them in one household via the
+same `create_household`/`accept_invite` RPCs onboarding would use, and seeds the
+starter Putzplan.
+
+```bash
 npx expo start
 ```
 
-Sign up, create your household (you get a starter Putzplan), then **Mehr → Partner
-einladen** to generate a 6-character code for your wife.
+Open the app, tap your name.
 
 **About push notifications:** remote push was removed from Expo Go in SDK 53, so
 Putzplan reminders need a **development build**. Everything else — realtime, camera,
@@ -177,6 +245,69 @@ npx eas build --profile development --platform android
 Then **Mehr → Push auf diesem Gerät → Aktivieren** to register the device. The screen
 tells you exactly why registration failed if it does (Expo Go, simulator, missing
 project id, permission denied).
+
+### 8. Cloud builds need the env vars uploaded separately
+
+`.env` and `.env*.local` are git-ignored, and EAS Build excludes git-ignored files
+from the upload. So a cloud build has none of them: every `EXPO_PUBLIC_*` inlines
+as `undefined` and the app dies on launch at `required()` in `src/lib/env.ts`.
+Local builds (`expo run:android`, `eas build --local`) read the filesystem and are
+unaffected.
+
+Push each profile into the matching EAS environment once:
+
+```bash
+npm run env:prod && npx eas-cli env:push preview      --path .env.local --force
+npm run env:prod && npx eas-cli env:push production   --path .env.local --force
+npm run env:dev  && npx eas-cli env:push development  --path .env.local --force
+```
+
+(`.env.local` only carries the active profile's pair — add the three shared values
+from `.env` to the pushed file, or `eas env:push` them separately.) Each build
+profile in `eas.json` names its environment, so `--profile preview` picks up the
+`preview` set.
+
+Uploaded values win over local `.env` files during a build, so a cloud build is not
+affected by whichever profile happens to be active on your machine. To confirm what
+a build would actually bake in:
+
+```bash
+npx eas-cli env:exec preview "npx expo export --platform android --output-dir dist-check"
+grep -a "your.address@haushalt.local" dist-check/_expo/static/js/android/*.hbc
+```
+
+Re-run `env:push` after rotating a password — the uploaded copy does not track the
+file.
+
+### 9. Shipping changes without reinstalling
+
+`expo-updates` is configured, so JS and asset changes reach installed apps over the
+air. Each build profile publishes to the channel of the same name:
+
+```bash
+npm run update:preview      # eas update --channel preview --environment preview
+npm run update:production
+```
+
+`--environment` is not optional (SDK 55+): the bundle is built on your machine, so
+without it `EXPO_PUBLIC_*` would be inlined from whichever local profile happens to
+be active — publishing your dev credentials into the real app. The scripts above
+pin it to the matching EAS environment.
+
+`runtimeVersion` uses the `fingerprint` policy rather than `appVersion`. A
+fingerprint is computed from the native project — dependencies, config plugins,
+app config — so adding a native module changes it automatically and old binaries
+simply stop receiving updates. Under `appVersion` you would have to remember to
+bump `version` by hand, and forgetting means shipping JS that its binary cannot
+run. Silently no update beats a crash.
+
+So: **JS, styling, screens, copy → OTA.** New native dependency, changed config
+plugin, an Expo SDK bump → new APK. `npx expo-updates fingerprint:generate
+--platform android` before and after a change tells you which one you are looking at.
+
+Updates install on the next cold start by themselves. **Mehr → App-Version** shows
+what is running and can pull and apply one immediately, which is also how you check
+whether the other phone is on the current version.
 
 ---
 
@@ -192,13 +323,14 @@ split rules, RLS enforcement, recurrence and rotation, and the inventory scan fl
 
 ```bash
 npm run test:db
-# 46 passed, 0 failed
+# 70 passed, 0 failed
 ```
 
 **The cron:** the app shows it under **Mehr → Server-Status**. Or query it directly:
 
 ```sql
-select ran_at, households_scanned, tasks_due, notifications_sent, duration_ms, error
+select ran_at, households_scanned, tasks_due, notifications_sent,
+       restock_notifications_sent, recurring_expenses_generated, duration_ms, error
 from public.system_heartbeat
 order by ran_at desc
 limit 24;
@@ -268,14 +400,23 @@ agenda screen both do a single indexed comparison — and cannot disagree with e
 
 ### Reminders and the keep-alive
 
-`household-tick` does two jobs per run, in this order:
+`household-tick` does three jobs per run, in this order:
 
 1. **Keep-alive**, always first and in its own try/catch. A read and a write through
    PostgREST. Supabase pauses free projects after ~7 idle days; a `pg_cron` job that
    only runs SQL never leaves the database process, so it is not something to bet
    uptime on. An HTTP round-trip from the function to the project's own API
    unambiguously is activity, and it happens whether or not any reminder is due.
-2. **Reminders** for tasks that are due or overdue.
+2. **Recurring expenses** — see below. Unconditional, like the keep-alive: a bill
+   is due on its date regardless of which hour the household likes to be nudged at.
+3. **Reminders**, per household at its own local `reminder_hour` — first staples at
+   or below their restock threshold, then cleaning tasks that are due or overdue.
+   The restock pass runs before the cleaning one and shares none of its early exits,
+   so a household with no chores due still gets told it is out of toilet paper.
+
+Both reminder passes go through one `deliver()` helper rather than two copies of the
+ticket → receipt → dead-token dance: that is the fiddly part of Expo push, and a
+second copy would drift the moment one of them was fixed.
 
 Duplicate suppression is a unique index on
 `notification_log (task_id, profile_id, kind, due_on)`. The function inserts with
@@ -285,6 +426,115 @@ exactly one "Bad putzen" per task per due date per person.
 
 Dead push tokens heal themselves: Expo's ticket often reports `DeviceNotRegistered`
 immediately, and a later sweep checks delivery receipts and disables what is gone.
+
+### Fixkosten are templates, not a second ledger
+
+`recurring_expenses` holds rent, Strom, subscriptions — a *template*, never money.
+`generate_due_recurring_expenses()` turns a due template into an ordinary row in
+`expenses`, through the same `apply_expense_split()` the manual flow uses, so a
+generated bill is indistinguishable from a typed one: same balance, same settlement,
+same stats. The alternative — keeping projected fixed costs in their own table and
+adding them to reports — needs every reader to remember to combine two sources, and
+gives you two numbers that can disagree.
+
+Consequences worth knowing: the split is always equal (a template has no way to
+supply per-item lines or custom ratios at generation time), and a template that has
+been due for months produces only the *next* occurrence per run rather than
+backfilling a year of missed bills. Pausing (`is_active = false`) is the intended
+"stop this" — deleting is also fine, it just leaves the already-generated expenses
+behind with nothing pointing at them.
+
+### Stats
+
+Two views, both `security_invoker` like every other view here.
+`v_expense_category_month` groups on `date_trunc('month', purchased_at)` and folds
+`NULL` categories into `Sonstiges`. `v_item_purchase_frequency` groups
+`expense_items.name` on `lower(btrim(...))` — free text, so casing and stray
+whitespace merge, but genuine spelling variants ("Milch" vs "Vollmilch") stay
+separate; merging those needs real product matching that table has no way to do.
+
+`expenses.category` stays free text rather than an enum. `EXPENSE_CATEGORIES` in
+`src/features/expenses/categories.ts` is the set the pickers *offer*; the stats
+screen renders whatever the view returns and falls back to a neutral icon for
+anything unlisted, so adding a category never needs a migration.
+
+### Empty lots are deleted, staples are tracked on the product
+
+`inventory_adjust()` deletes a lot once it reaches zero — an empty shelf row is
+not inventory, it is clutter in the one list you scan to answer "haben wir noch".
+That forces a decision about where "erinnere mich, wenn das knapp wird" lives: on
+the lot it would be deleted at exactly the moment it matters, so it lives on
+`products.restock_min_quantity` instead. Which is where it belonged regardless —
+"wir wollen immer Klopapier im Haus" is a fact about the product, not about one
+particular Schrank.
+
+The product row therefore always survives. That is load-bearing twice over: the
+staple keeps reminding at zero stock, and the catalog entry keeps deduplicating
+future scans and manual entries of the same thing.
+
+`inventory_items.min_quantity` still exists and is no longer written. Left in
+place rather than dropped — it is nullable, nothing reads it, and dropping a
+column is the one change that cannot be walked back without data loss.
+
+Restock reminders reuse `notification_log` rather than growing a parallel
+mechanism, so they inherit its dedupe. The second unique index is deliberately
+*not* partial: a cleaning row has `product_id` NULL and a restock row has
+`task_id` NULL, so under the default `NULLS DISTINCT` each index only ever
+constrains its own kind of row — and both stay usable as a PostgREST
+`on_conflict` target, which a partial index would not be. `due_on` carries the
+household-local date, so an empty staple nudges at most once per person per day
+and stops by itself once stock is back above the threshold.
+
+### Moving stock merges, and splits
+
+`inventory_move()` is an RPC rather than an update on `location_id`, because
+`inventory_items_lot_unique` is `(product_id, location_id, expires_on)` with
+`NULLS NOT DISTINCT` — moving a lot into a location that already holds the same
+product at the same expiry would hit a unique violation. That is not an error
+case, it is the *normal* one: you are putting the rest of the flour where the
+flour already lives. So the two lots merge.
+
+Moving *part* of a lot ("drei von den zehn Dosen in den Keller") splits it,
+carrying `expires_on`, `opened_at` and `note` onto the new lot — those describe
+the goods, not the shelf. Asking for more than the lot holds raises instead of
+clamping: with two phones on the same data, moving silently less than asked
+would leave stock sitting where you now believe it is not.
+
+The movement log distinguishes the two shapes, because `delta` is per *lot*: a
+lot that merely changes shelf logs one row with `delta = 0` — nothing about that
+lot's quantity changed — while stock crossing from one lot into another logs a
+`-n`/`+n` pair. Move rows therefore always sum to zero.
+
+Product name, brand and unit are editable on the product screen. Note there is
+no uniqueness on product names, so renaming one product onto another's name
+leaves two entries that look identical — the name matching in
+`inventory_scan_in()` prevents duplicates being *created*, it cannot fuse two
+that already exist.
+
+### Manual entry deduplicates by name
+
+`inventory_scan_in()` matches an existing product by `lower(btrim(name))` when
+there is no barcode, so typing "Mehl" twice tops up one entry instead of making
+two. Matching is limited to the barcode-less case on purpose: a scanned barcode
+is authoritative, and two brands of Mehl sharing a name should stay two products.
+The manual-add screen's typeahead is the visible half of the same guarantee —
+picking a suggestion also passes that product's barcode through, so an explicit
+choice is matched exactly rather than falling back to the name.
+
+### Editing an expense
+
+`update_expense()` re-runs `apply_expense_split()`, so items and shares are
+rebuilt from scratch rather than patched, and the deferred balance trigger still
+has the last word. It refuses a **settled** expense: `v_household_balances` only
+counts open ones, so the edit would move no balance at all while the settlement
+row went on claiming a transfer that no longer matched — a silent no-op with a
+history that quietly stops adding up. The UI hides the entry point for a settled
+expense; the RPC is the backstop for an older app version on the other phone.
+
+The create and edit screens share one `ExpenseForm`. The split preview has to
+agree with `apply_expense_split()` cent for cent, and two copies of the item
+editor and shares validation would drift — you would only find out when the two
+screens disagreed about who owes what.
 
 ### Realtime on the client
 
@@ -315,7 +565,10 @@ that need to feel instant (ticking a chore, checking a to-do) are optimistic loc
 
 | Command | What it does |
 | --- | --- |
-| `npm start` | Expo dev server |
+| `npm start` | Switch to the **dev** users, then start the Expo dev server |
+| `npm run start:prod` | Switch to the **real** users, then start the Expo dev server |
+| `npm run env:dev` / `env:prod` | Switch env profile only, without starting Metro |
+| `npm run seed:users` | Create the active profile's two accounts + their household |
 | `npm run android` / `ios` | Launch on a device/emulator |
 | `npm run test:db` | Apply all migrations to a real Postgres and test the logic |
 | `npm run typecheck` | `tsc --noEmit` |

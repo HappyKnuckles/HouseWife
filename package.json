@@ -25,6 +25,7 @@
     "expo-router": "~57.0.8",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.1",
+    "expo-updates": "~57.0.11",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
@@ -44,13 +45,19 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "expo start",
+    "start": "node scripts/switch-env.mjs dev && expo start --clear",
+    "start:prod": "node scripts/switch-env.mjs prod && expo start --clear",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "test:db": "node supabase/tests/schema.test.mjs",
+    "env:dev": "node scripts/switch-env.mjs dev",
+    "env:prod": "node scripts/switch-env.mjs prod",
+    "seed:users": "node --env-file=.env --env-file=.env.local supabase/scripts/create-users.mjs",
     "typecheck": "tsc --noEmit",
-    "gen:types": "supabase gen types typescript --linked > src/lib/database.types.ts"
+    "gen:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
+    "update:preview": "eas update --channel preview --environment preview",
+    "update:production": "eas update --channel production --environment production"
   },
   "private": true
 }

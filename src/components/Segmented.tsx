@@ -63,11 +63,13 @@ export function Chip({
   label,
   active,
   color,
+  disabled,
   onPress,
 }: {
   label: string;
   active?: boolean;
   color?: string;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const { colors } = useAppTheme();
@@ -88,12 +90,14 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       style={[
         styles.chip,
         active && { backgroundColor: accent + '1F', borderColor: accent },
+        disabled && { opacity: 0.4 },
       ]}
       accessibilityRole="button"
-      accessibilityState={{ selected: !!active }}
+      accessibilityState={{ selected: !!active, disabled: !!disabled }}
     >
       <Text style={[styles.chipLabel, active && { color: accent, fontWeight: '600' }]}>{label}</Text>
     </Pressable>

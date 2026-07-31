@@ -40,13 +40,15 @@ export type ExpenseStatus = 'open' | 'settled';
 export type SettlementMethod = 'cash' | 'transfer' | 'paypal' | 'other';
 export type OcrStatus = 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
 export type RecurrenceUnit = 'day' | 'week' | 'month';
+/** Fixed costs repeat monthly or weekly; a daily rent makes no sense. */
+export type RecurringExpenseUnit = 'week' | 'month';
 export type ScheduleMode = 'fixed' | 'after_completion';
 export type AssignmentMode = 'fixed' | 'rotating';
 export type AgendaStatus = 'overdue' | 'due_today' | 'due_soon' | 'upcoming';
 export type LocationKind = 'room' | 'shelf' | 'box' | 'fridge' | 'freezer' | 'cabinet' | 'other';
 export type ProductUnit = 'piece' | 'g' | 'kg' | 'ml' | 'l' | 'pack';
 export type MovementReason = 'scan_in' | 'manual_adjust' | 'consume' | 'move' | 'correction' | 'initial';
-export type NotificationKind = 'due' | 'overdue' | 'digest';
+export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock';
 export type Platform = 'ios' | 'android';
 
 // ---------------------------------------------------------------------------
@@ -263,6 +265,13 @@ export type ProductRow = {
   image_url: string | null;
   default_location_id: string | null;
   notes: string | null;
+  /**
+   * Staple threshold. NULL = not tracked. Otherwise household-tick reminds
+   * once a day while the total across all lots is at or below this. Lives on
+   * the product rather than the lot because an emptied lot is deleted — see
+   * migration 0015.
+   */
+  restock_min_quantity: number | null;
   source: 'manual' | 'scan' | 'external';
   external_provider: string | null;
   external_id: string | null;
@@ -327,7 +336,10 @@ export type PushTokenRow = {
 export type NotificationLogRow = {
   id: string;
   household_id: string;
+  /** Set for cleaning reminders; null for restock ones. */
   task_id: string | null;
+  /** Set for restock reminders; null for cleaning ones. */
+  product_id: string | null;
   profile_id: string;
   kind: NotificationKind;
   due_on: string;
@@ -346,8 +358,35 @@ export type SystemHeartbeatRow = {
   households_scanned: number;
   tasks_due: number;
   notifications_sent: number;
+  restock_notifications_sent: number;
+  recurring_expenses_generated: number;
   duration_ms: number | null;
   error: string | null;
+}
+
+/**
+ * A fixed cost (Miete, Strom, …). This is a *template* — the hourly cron
+ * materialises it into a real ExpenseRow on next_due_on, so the money itself
+ * always lives in `expenses` and nothing here has to be double-counted.
+ */
+export type RecurringExpenseRow = {
+  id: string;
+  household_id: string;
+  name: string;
+  category: string | null;
+  amount_cents: number;
+  currency: string;
+  paid_by: string;
+  recurrence_unit: RecurringExpenseUnit;
+  recurrence_interval: number;
+  /** Monthly only, clamped for short months. */
+  day_of_month: number | null;
+  next_due_on: string;
+  last_generated_expense_id: string | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +459,25 @@ export type LocationPathRow = {
   barcode: string | null;
 }
 
+export type ExpenseCategoryMonthRow = {
+  household_id: string;
+  /** NULL categories are folded into 'Sonstiges' by the view. */
+  category: string;
+  /** First of the month, as a date string. */
+  month: string;
+  expense_count: number;
+  total_cents: number;
+}
+
+export type ItemPurchaseFrequencyRow = {
+  household_id: string;
+  /** Lower-cased and trimmed by the view, so it is a grouping key, not a label. */
+  item_name: string;
+  purchase_count: number;
+  total_cents: number;
+  last_purchased_at: string;
+}
+
 export type InventoryTotalRow = {
   household_id: string;
   product_id: string;
@@ -432,7 +490,9 @@ export type InventoryTotalRow = {
   total_quantity: number;
   location_count: number;
   next_expiry: string | null;
+  /** True when restock_min_quantity is set and total_quantity has reached it. */
   is_low: boolean | null;
+  restock_min_quantity: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +526,10 @@ export type Database = {
       receipts: Table<ReceiptRow, Stamps | 'mime_type' | 'ocr_status'>;
       settlements: Table<SettlementRow, 'id' | 'created_at' | 'currency' | 'method' | 'settled_at'>;
       settlement_expenses: Table<SettlementExpenseRow>;
+      recurring_expenses: Table<
+        RecurringExpenseRow,
+        Stamps | 'currency' | 'recurrence_unit' | 'recurrence_interval' | 'next_due_on' | 'is_active'
+      >;
       todos: Table<TodoRow, Stamps | 'is_done' | 'position'>;
       cleaning_areas: Table<CleaningAreaRow, Stamps | 'icon' | 'color' | 'sort_order'>;
       cleaning_tasks: Table<
@@ -492,7 +556,14 @@ export type Database = {
       notification_log: Table<NotificationLogRow, 'id' | 'sent_at'>;
       system_heartbeat: Table<
         SystemHeartbeatRow,
-        'id' | 'ran_at' | 'run_kind' | 'households_scanned' | 'tasks_due' | 'notifications_sent'
+        | 'id'
+        | 'ran_at'
+        | 'run_kind'
+        | 'households_scanned'
+        | 'tasks_due'
+        | 'notifications_sent'
+        | 'restock_notifications_sent'
+        | 'recurring_expenses_generated'
       >;
     };
     Views: {
@@ -501,6 +572,8 @@ export type Database = {
       v_cleaning_stats: View<CleaningStatsRow>;
       v_location_paths: View<LocationPathRow>;
       v_inventory_totals: View<InventoryTotalRow>;
+      v_expense_category_month: View<ExpenseCategoryMonthRow>;
+      v_item_purchase_frequency: View<ItemPurchaseFrequencyRow>;
     };
     Functions: {
       current_household_id: { Args: Record<string, never>; Returns: string | null };
@@ -567,6 +640,11 @@ export type Database = {
       };
       inventory_adjust: {
         Args: { p_item_id: string; p_delta: number; p_reason?: MovementReason; p_note?: string | null };
+        Returns: InventoryItemRow;
+      };
+      inventory_move: {
+        /** `p_quantity` null moves the whole lot. */
+        Args: { p_item_id: string; p_location_id?: string | null; p_quantity?: number | null };
         Returns: InventoryItemRow;
       };
       seed_starter_data: { Args: { p_household_id: string }; Returns: undefined };

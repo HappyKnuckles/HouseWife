@@ -99,7 +99,7 @@ Auto-created by an `on auth.users insert` trigger (`handle_new_user()`), so a fr
 > **Decision:** membership is a single `profiles.household_id` column rather than a `household_members` join table. For two people in one household the join table only buys multi-household support you said you don't need, and it costs an extra lookup in the hottest code path there is (every RLS check). If you ever want multi-household, the migration is mechanical — I'll keep all membership reads behind one SQL function so exactly one place changes.
 
 ### `household_invites`
-`id`, `household_id`, `code text unique not null` (6 chars, human-typeable), `created_by`, `expires_at`, `accepted_by`, `accepted_at`. Your wife signs up → enters the code → `accept_invite(code)` RPC sets her `household_id`. Guarded so a household never exceeds 2 members unless you raise the cap (`households.max_members smallint default 2`).
+`id`, `household_id`, `code text unique not null` (6 chars, human-typeable), `created_by`, `expires_at`, `accepted_by`, `accepted_at`. The second member signs up → enters the code → `accept_invite(code)` RPC sets their `household_id`. Guarded so a household never exceeds 2 members unless you raise the cap (`households.max_members smallint default 2`).
 
 ### The RLS keystone
 
@@ -209,7 +209,7 @@ from profiles p
 left join lateral (...) paid on true
 left join lateral (...) owed on true;
 ```
-Only `status='open'` expenses count. Nets always sum to zero. The UI reads one row: `net_cents > 0` → "Nico bekommt 24,50 €".
+Only `status='open'` expenses count. Nets always sum to zero. The UI reads one row: `net_cents > 0` → "… bekommt 24,50 €".
 
 ---
 
@@ -263,7 +263,7 @@ RPC `complete_cleaning_task(p_task_id uuid, p_completed_at timestamptz default n
 3. rotate `assigned_to` to the next entry in `rotation_order` when `assignment_mode='rotating'`,
 4. clear the pending `notification_log` entry for that due date.
 
-Atomic → one `UPDATE` broadcast → your wife's phone re-renders instantly.
+Atomic → one `UPDATE` broadcast → the other phone re-renders instantly.
 
 ### Agenda view
 `v_cleaning_agenda` (`security_invoker`) adds `days_until = next_due_on - (now() at time zone household.timezone)::date` and a derived `status`: `overdue` / `due_today` / `due_soon` (≤2d) / `upcoming`. The screen is a single query, sorted by `next_due_on`.
@@ -301,6 +301,11 @@ scan (expo-camera) → local products by barcode?  → yes: increment quantity, 
 `id`, `household_id`, `item_id`, `product_id`, `delta numeric not null`, `reason text check (reason in ('scan_in','manual_adjust','consume','move','correction','initial'))`, `from_location_id`, `to_location_id`, `created_by`, `created_at`.
 
 Cheap to write, and it's what makes concurrent edits from two phones debuggable ("who took the last one?"). `quantity` stays denormalized on `inventory_items` for fast reads; movements are the log, written in the same RPC.
+
+`delta` is per **lot**, not per product, which is what makes `reason='move'` readable: a lot that simply changes shelf logs one row with `delta 0` (nothing about that lot's quantity changed), while stock moving *between* two lots — a merge, or a partial move — logs a `-n`/`+n` pair. Either way the move rows sum to zero, so a move can never invent or lose stock.
+
+### `inventory_move(p_item_id, p_location_id, p_quantity)`
+Relocates stock. `p_quantity` null moves the whole lot; a smaller amount splits the lot, carrying `expires_on`, `opened_at` and `note` across because those describe the goods rather than the shelf. If the destination already holds the same product at the same expiry it merges instead — that is the *normal* case (putting the rest of the flour where the flour lives) and a plain `update … set location_id` would hit `inventory_items_lot_unique` there. Asking for more than the lot holds raises rather than clamping: moving silently less would leave stock where you believe it no longer is.
 
 ---
 
@@ -415,13 +420,13 @@ Ordered, idempotent where sensible, runnable top-to-bottom on a virgin Postgres.
 ## 13. App structure
 
 ```
-app/                          # expo-router
-  (auth)/sign-in.tsx, join-household.tsx
-  (tabs)/putzplan/            # ← flagship
-  (tabs)/ausgaben/
-  (tabs)/todos/
-  (tabs)/inventar/
 src/
+  app/                        # expo-router — chosen over a top-level app/ automatically
+    (auth)/sign-in.tsx, join-household.tsx
+    (tabs)/putzplan/          # ← flagship
+    (tabs)/ausgaben/
+    (tabs)/todos/
+    (tabs)/inventar/
   lib/supabase.ts             # typed client, AsyncStorage session, autoRefresh
   lib/database.types.ts       # generated: supabase gen types typescript
   lib/realtime.ts             # useRealtimeTable, household channel manager

@@ -28,9 +28,9 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 /**
- * Device-local, not synced through the household. Your dark mode preference
- * has no reason to flip your wife's phone, so this lives in AsyncStorage, not
- * in profiles/households.
+ * Device-local, not synced through the household. One member's dark mode
+ * preference has no reason to flip the other's phone, so this lives in
+ * AsyncStorage, not in profiles/households.
  */
 export function AppThemeProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();

@@ -1,20 +1,54 @@
 -- ============================================================================
 -- Schedule household-tick
 -- ============================================================================
--- Run this ONCE in the Supabase SQL editor after deploying the function.
+-- Run this ONCE after deploying the function. It is safe to re-run.
+--   npx supabase db query --linked -f supabase/cron/schedule.sql
+-- or paste it into the Dashboard SQL editor.
+--
 -- It is not a migration because it embeds project-specific values.
 --
--- Replace:
---   <PROJECT_REF>  your project ref (Settings → General)
---   <CRON_SECRET>  the same value you passed to `supabase secrets set CRON_SECRET=…`
+-- The secret below must equal what you passed to
+-- `supabase secrets set CRON_SECRET=…` byte for byte. No surrounding double
+-- quotes, no trailing space: the function compares the header with !==, so a
+-- stray character means every hourly run gets a silent 401 and nothing else
+-- in the system tells you why. Verify with system_heartbeat, never with
+-- cron.job_run_details — see the bottom of this file.
 -- ============================================================================
 
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
--- Storing the secret as a database setting keeps it out of the job definition
--- that shows up in cron.job for anyone reading the table.
-alter database postgres set app.cron_secret = '"das_ist_aber_doof" ';
+-- The secret lives in Vault rather than in the job definition, so that reading
+-- cron.job does not hand it over.
+--
+-- The obvious way to do that is `alter database postgres set app.cron_secret`,
+-- which is what this file used to do — but a custom GUC is only a placeholder
+-- until an extension claims the prefix, and Postgres requires superuser to set
+-- a placeholder at database level. Supabase's `postgres` role owns the
+-- database but is not a superuser, so that statement fails with
+--   42501: permission denied to set parameter "app.cron_secret"
+-- Vault is installed on every Supabase project, encrypts at rest, and is
+-- readable by `postgres` — which is the role pg_cron runs the job as, since
+-- jobs run as whoever scheduled them. Same goal, privileges we actually have.
+do $vault$
+declare
+  v_id uuid;
+begin
+  select id into v_id from vault.secrets where name = 'cron_secret';
+
+  if v_id is null then
+    perform vault.create_secret(
+      '<CRON_SECRET>',
+      'cron_secret',
+      'x-cron-secret header for the household-tick function'
+    );
+  else
+    -- Re-running after a rotation must replace the value; create_secret would
+    -- fail on the unique name instead.
+    perform vault.update_secret(v_id, '<CRON_SECRET>');
+  end if;
+end
+$vault$;
 
 -- Re-running this file should replace the job, not add a second one.
 select cron.unschedule('household-tick')

@@ -88,6 +88,67 @@ export function useSettleUp() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+/** `month` is the first of the month, `YYYY-MM-DD`. See monthKey() in format.ts. */
+export function useCategoryMonth(month: string) {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['expenses', 'stats', 'category', householdId, month],
+    queryFn: () => api.fetchCategoryMonth(householdId, month),
+  });
+}
+
+export function useTopItems(limit = 12) {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['expenses', 'stats', 'top-items', householdId, limit],
+    queryFn: () => api.fetchTopItems(householdId, limit),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Recurring expenses (Fixkosten)
+// ---------------------------------------------------------------------------
+
+export function useRecurringExpenses() {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['expenses', 'recurring', householdId],
+    queryFn: () => api.fetchRecurringExpenses(householdId),
+  });
+}
+
+export function useCreateRecurringExpense() {
+  const householdId = useHouseholdId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: Omit<api.CreateRecurringExpenseInput, 'householdId'>) =>
+      api.createRecurringExpense({ householdId, ...input }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+  });
+}
+
+export function useSetRecurringExpenseActive() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.setRecurringExpenseActive(id, isActive),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+  });
+}
+
+export function useDeleteRecurringExpense() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteRecurringExpense(id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+  });
+}
+
 export function useUploadReceipt() {
   const householdId = useHouseholdId();
   const queryClient = useQueryClient();

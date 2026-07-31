@@ -14,7 +14,6 @@ interface AuthContextValue {
   initializing: boolean;
   profileLoading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, displayName: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -73,15 +72,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password,
-        });
-        if (error) throw error;
-      },
-      async signUp(email, password, displayName) {
-        const { error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          // Read by the handle_new_user() trigger to name the profile row.
-          options: { data: { display_name: displayName.trim() } },
         });
         if (error) throw error;
       },

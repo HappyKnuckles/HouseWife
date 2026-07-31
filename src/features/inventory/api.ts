@@ -203,6 +203,69 @@ export async function findProductByBarcode(
 }
 
 /**
+ * Typeahead for manual entry.
+ *
+ * Picking a suggestion rather than retyping is what keeps "Mehl" one catalog
+ * entry instead of three. inventory_scan_in() also matches on the normalised
+ * name as a backstop, so a near-miss here is a duplicate avoided anyway —
+ * this is the visible half of the same guarantee.
+ */
+export async function searchProducts(
+  householdId: string,
+  query: string,
+  limit = 8,
+): Promise<ProductRow[]> {
+  const needle = query.trim();
+  if (needle.length < 2) return [];
+
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('household_id', householdId)
+    // ilike, not full-text: a household catalog is hundreds of rows, and
+    // "was heißt das nochmal" is a prefix/substring question, not a ranked one.
+    .ilike('name', `%${needle}%`)
+    .order('name')
+    .limit(limit);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function fetchProduct(productId: string): Promise<ProductRow | null> {
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('id', productId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Marks a product as a staple, or stops tracking it (null).
+ *
+ * Deliberately on the product and not on a lot: an emptied lot is deleted by
+ * inventory_adjust(), which would take the threshold with it — exactly when
+ * the reminder matters most.
+ */
+export async function setRestockThreshold(
+  productId: string,
+  threshold: number | null,
+): Promise<ProductRow> {
+  const { data, error } = await supabase
+    .from('products')
+    .update({ restock_min_quantity: threshold })
+    .eq('id', productId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
  * External lookup, step three of the scan flow.
  *
  * Ships pointed at a null provider that always misses, so scanning works
@@ -260,6 +323,58 @@ export async function adjustQuantity(
     p_delta: delta,
     p_reason: reason,
     p_note: note ?? null,
+  });
+
+  if (error) throw error;
+  return data as InventoryItemRow;
+}
+
+/**
+ * Corrects the catalog entry itself — the name you mistyped, the brand the
+ * lookup got wrong, the unit.
+ *
+ * Note there is no uniqueness on product names, so renaming one product onto
+ * another's name leaves you with two entries that look identical. Merging
+ * products is a bigger feature than this; the name matching in
+ * inventory_scan_in() only prevents duplicates being *created*, it cannot
+ * retroactively fuse two that already exist.
+ */
+export async function updateProduct(
+  productId: string,
+  patch: Partial<Pick<ProductRow, 'name' | 'brand' | 'unit' | 'category' | 'notes'>>,
+): Promise<ProductRow> {
+  const { data, error } = await supabase
+    .from('products')
+    .update(patch)
+    .eq('id', productId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Moves stock to another location — all of a lot, or `quantity` of it.
+ *
+ * An RPC rather than an update on location_id, because the destination may
+ * already hold this product at the same expiry — which is the normal case,
+ * not an error — and the lot-uniqueness index would reject it. The function
+ * merges the two lots instead, or splits off a new one for a partial move.
+ * See migrations 0017 and 0018.
+ *
+ * Returns the lot the stock ended up in, which for a partial move is a
+ * different row than the one that was passed in.
+ */
+export async function moveItem(
+  itemId: string,
+  locationId: string | null,
+  quantity?: number | null,
+): Promise<InventoryItemRow> {
+  const { data, error } = await supabase.rpc('inventory_move', {
+    p_item_id: itemId,
+    p_location_id: locationId,
+    p_quantity: quantity ?? null,
   });
 
   if (error) throw error;

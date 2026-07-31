@@ -2,13 +2,17 @@ import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 
 import type {
+  ExpenseCategoryMonthRow,
   ExpenseItemInput,
   ExpenseItemRow,
   ExpenseRow,
   ExpenseShareInput,
   ExpenseShareRow,
   HouseholdBalanceRow,
+  ItemPurchaseFrequencyRow,
   ReceiptRow,
+  RecurringExpenseRow,
+  RecurringExpenseUnit,
   SettlementMethod,
   SplitType,
 } from '../../lib/database.types';
@@ -148,6 +152,128 @@ export async function fetchSettlements(householdId: string) {
 
   if (error) throw error;
   return data ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+/**
+ * Spend per category, for one month.
+ *
+ * `month` is the first of the month as `YYYY-MM-DD` — the same shape the view
+ * produces via date_trunc, so this is an equality match rather than a range
+ * scan.
+ */
+export async function fetchCategoryMonth(
+  householdId: string,
+  month: string,
+): Promise<ExpenseCategoryMonthRow[]> {
+  const { data, error } = await supabase
+    .from('v_expense_category_month')
+    .select('*')
+    .eq('household_id', householdId)
+    .eq('month', month)
+    .order('total_cents', { ascending: false });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** "Was kaufen wir am häufigsten" — top itemised lines by purchase count. */
+export async function fetchTopItems(
+  householdId: string,
+  limit = 12,
+): Promise<ItemPurchaseFrequencyRow[]> {
+  const { data, error } = await supabase
+    .from('v_item_purchase_frequency')
+    .select('*')
+    .eq('household_id', householdId)
+    .order('purchase_count', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Recurring expenses (Fixkosten)
+// ---------------------------------------------------------------------------
+
+export async function fetchRecurringExpenses(householdId: string): Promise<RecurringExpenseRow[]> {
+  const { data, error } = await supabase
+    .from('recurring_expenses')
+    .select('*')
+    .eq('household_id', householdId)
+    .order('is_active', { ascending: false })
+    .order('next_due_on');
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export interface CreateRecurringExpenseInput {
+  householdId: string;
+  name: string;
+  amountCents: number;
+  paidBy: string;
+  category?: string | null;
+  recurrenceUnit?: RecurringExpenseUnit;
+  recurrenceInterval?: number;
+  dayOfMonth?: number | null;
+  nextDueOn: string;
+}
+
+/**
+ * A plain insert, unlike createExpense(): a template has no shares to balance,
+ * so there is nothing here that needs to be atomic across two tables. The
+ * splitting only happens later, when the cron materialises it.
+ */
+export async function createRecurringExpense(
+  input: CreateRecurringExpenseInput,
+): Promise<RecurringExpenseRow> {
+  const unit = input.recurrenceUnit ?? 'month';
+
+  const { data, error } = await supabase
+    .from('recurring_expenses')
+    .insert({
+      household_id: input.householdId,
+      name: input.name,
+      category: input.category ?? null,
+      amount_cents: input.amountCents,
+      paid_by: input.paidBy,
+      recurrence_unit: unit,
+      recurrence_interval: input.recurrenceInterval ?? 1,
+      // The schema rejects a day_of_month on a weekly template.
+      day_of_month: unit === 'month' ? (input.dayOfMonth ?? null) : null,
+      next_due_on: input.nextDueOn,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/** Pausing rather than deleting keeps the already-generated history intact. */
+export async function setRecurringExpenseActive(
+  id: string,
+  isActive: boolean,
+): Promise<RecurringExpenseRow> {
+  const { data, error } = await supabase
+    .from('recurring_expenses')
+    .update({ is_active: isActive })
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteRecurringExpense(id: string): Promise<void> {
+  const { error } = await supabase.from('recurring_expenses').delete().eq('id', id);
+  if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------

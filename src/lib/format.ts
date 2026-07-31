@@ -95,6 +95,22 @@ export function todayIso(): string {
   return `${now.getFullYear()}-${m}-${d}`;
 }
 
+/**
+ * First of a month as `YYYY-MM-DD` — the key v_expense_category_month groups
+ * on. `offset` walks backwards: 0 = this month, -1 = last month.
+ */
+export function monthKey(offset = 0): string {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+/** "Juli 2026" */
+export function formatMonth(monthIso: string): string {
+  return new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' })
+    .format(parseDateOnly(monthIso));
+}
+
 /** "Heute", "Morgen", "Seit 3 Tagen", "In 5 Tagen" … */
 export function dueLabel(daysUntil: number): string {
   if (daysUntil === 0) return 'Heute fällig';
