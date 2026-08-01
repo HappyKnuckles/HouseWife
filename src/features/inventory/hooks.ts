@@ -36,13 +36,13 @@ export function useLocations() {
   });
 }
 
-export function useCreateLocation() {
+export function useCreateLocations() {
   const householdId = useHouseholdId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: Omit<Parameters<typeof api.createLocation>[0], 'householdId'>) =>
-      api.createLocation({ householdId, ...input }),
+    mutationFn: (input: Omit<Parameters<typeof api.createLocations>[0], 'householdId'>) =>
+      api.createLocations({ householdId, ...input }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 }

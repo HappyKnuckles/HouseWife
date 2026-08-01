@@ -9,6 +9,7 @@ import { Button } from '../../components/Button';
 import { Chip } from '../../components/Segmented';
 import { Screen } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
+import { LocationComposer } from '../../features/inventory/components/LocationComposer';
 import {
   useBarcodeResolver,
   useLocations,
@@ -103,6 +104,11 @@ export default function ScanScreen() {
     field: { gap: spacing.sm },
     label: { ...typography.captionStrong, color: c.textMuted },
     chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
+    composer: {
+      padding: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: c.surfaceMuted,
+    },
     sheetActions: { flexDirection: 'row' as const, gap: spacing.md, marginTop: spacing.sm },
     flex: { flex: 1 },
     permission: { flex: 1 as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: spacing.md },
@@ -121,6 +127,8 @@ export default function ScanScreen() {
   const [locationId, setLocationId] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [activeLocation, setActiveLocation] = useState<LocationPathRow | null>(null);
+  /** Whether the inline "Neuer Ort" form under the Ort chips is open. */
+  const [creatingLocation, setCreatingLocation] = useState(false);
 
   // Guards continuous camera frames from re-triggering a lookup that is
   // already in flight — mutation.isPending alone lags one render behind the
@@ -206,6 +214,7 @@ export default function ScanScreen() {
       setSaved(draft.name.trim());
       setDraft(null);
       setQuantity('1');
+      setCreatingLocation(false);
       setTimeout(() => setSaved(null), 2500);
     } catch (err) {
       Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
@@ -319,14 +328,41 @@ export default function ScanScreen() {
                     onPress={() => setLocationId(location.id)}
                   />
                 ))}
+                <Chip
+                  // Not "Abbrechen": that word already belongs to the button
+                  // that throws the whole scan away.
+                  label={creatingLocation ? 'Neuer Ort schließen' : '+ Neuer Ort'}
+                  active={creatingLocation}
+                  onPress={() => setCreatingLocation((v) => !v)}
+                />
               </View>
+
+              {/* Putting something away into a shelf that has no entry yet is
+                  the moment you notice it is missing — so the full composer,
+                  custom Art included, is here rather than a bare name field. */}
+              {creatingLocation ? (
+                <View style={styles.composer}>
+                  <LocationComposer
+                    onCreated={(created) => {
+                      // A batch like "Schub 1-3" leaves the first one selected:
+                      // the item in your hand goes somewhere, and the other
+                      // chips are one tap away.
+                      setLocationId(created[0]?.id ?? null);
+                      setCreatingLocation(false);
+                    }}
+                  />
+                </View>
+              ) : null}
             </View>
 
             <View style={styles.sheetActions}>
               <Button
                 label="Abbrechen"
                 variant="secondary"
-                onPress={() => setDraft(null)}
+                onPress={() => {
+                  setDraft(null);
+                  setCreatingLocation(false);
+                }}
                 style={styles.flex}
               />
               <Button

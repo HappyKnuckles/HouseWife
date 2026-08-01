@@ -305,7 +305,7 @@ So: **JS, styling, screens, copy → OTA.** New native dependency, changed confi
 plugin, an Expo SDK bump → new APK. `npx expo-updates fingerprint:generate
 --platform android` before and after a change tells you which one you are looking at.
 
-Updates install on the next cold start by themselves. **Mehr → App-Version** shows
+Updates install on the next cold start by themselves. **Mehr → Einstellungen → App-Version** shows
 what is running and can pull and apply one immediately, which is also how you check
 whether the other phone is on the current version.
 
@@ -552,6 +552,22 @@ icon, so a "Speisekammer" was impossible for no reason; it is free text now,
 with the known values keeping their icons and anything else falling back to a
 pin.
 
+The create form lives in `LocationComposer` rather than in the Orte screen,
+because the scan sheet needs the same one: the moment you notice a shelf has no
+entry is usually the moment you are holding something to put in it. Sharing the
+component means the mid-scan version offers custom Arten too, instead of
+degrading into a bare name field that quietly makes everything an `other`.
+
+Places arrive in runs, so the composer creates them in runs. The Name field
+takes a list — `Schrank, Kommode` — and a trailing range, `Schub 1-3`, which
+expands to three drawers in one insert (`expandLocationNames`, capped at
+`MAX_LOCATIONS_PER_BATCH`; a descending or oversized range is left as literal
+text and the field says so rather than inventing 500 drawers). After a *single*
+location is created the form stays open with that location as the parent, which
+is the other half of the same thought: a Schrank is made to be filled, so
+"Schrank" then "Schub 1-3" is two submits instead of four screens. Several at
+once stay siblings — "Schub 1-3" does not mean Schub 3 lives inside Schub 2.
+
 Renaming and re-parenting go through `update_location()` rather than a plain
 update, for one reason: `parent_id` is a self-reference, so making a location
 its own grandparent satisfies every constraint on the table and then hangs the
@@ -611,6 +627,23 @@ The create and edit screens share one `ExpenseForm`. The split preview has to
 agree with `apply_expense_split()` cent for cent, and two copies of the item
 editor and shares validation would drift — you would only find out when the two
 screens disagreed about who owes what.
+
+### Seven screens, five slots
+
+The tab bar is ours (`src/components/TabBar.tsx`), passed to the navigator as
+`tabBar`. The navigator, routing and back behaviour are untouched — only the
+bar is custom, which is the cheapest place to put this decision.
+
+`TABS` in that file is the whole navigation order: the first four get a slot,
+everything after lives in a sheet behind **Mehr**. Seven labels across a phone
+is unreadable, and an app where every screen is one tap away is an app with no
+opinion about which screens matter.
+
+The Mehr slot is not a tab of its own. When the current screen lives in the
+sheet, the slot wears that screen's icon, label and active tint — so "where am
+I" stays answerable from the bar for the demoted screens too, which is exactly
+what a plain overflow menu loses. A small chevron on the icon marks it as the
+slot that opens rather than navigates, in both states.
 
 ### Realtime on the client
 

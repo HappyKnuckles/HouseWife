@@ -76,25 +76,34 @@ export async function fetchLocations(householdId: string): Promise<LocationPathR
   return data ?? [];
 }
 
-export async function createLocation(input: {
+/**
+ * Creates one or more locations in a single insert.
+ *
+ * Plural rather than a loop in the caller: "Schrank, dann Schub 1 bis 3" is
+ * one thought and should be one round trip, and a partial failure halfway
+ * through a loop would leave the household with three of five drawers and no
+ * obvious way to tell which.
+ */
+export async function createLocations(input: {
   householdId: string;
-  name: string;
+  names: string[];
   kind: LocationPathRow['kind'];
   parentId?: string | null;
-}) {
+}): Promise<StorageLocationRow[]> {
   const { data, error } = await supabase
     .from('storage_locations')
-    .insert({
-      household_id: input.householdId,
-      name: input.name.trim(),
-      kind: input.kind,
-      parent_id: input.parentId ?? null,
-    })
-    .select()
-    .single();
+    .insert(
+      input.names.map((name) => ({
+        household_id: input.householdId,
+        name: name.trim(),
+        kind: input.kind,
+        parent_id: input.parentId ?? null,
+      })),
+    )
+    .select();
 
   if (error) throw error;
-  return data;
+  return data ?? [];
 }
 
 /**

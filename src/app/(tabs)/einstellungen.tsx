@@ -132,7 +132,7 @@ export default function SettingsScreen() {
 
   return (
     <Screen>
-      <ScreenHeader title="Mehr" subtitle={household?.name ?? ''} />
+      <ScreenHeader title="Einstellungen" subtitle={household?.name ?? ''} />
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.sectionTitle}>Darstellung</Text>
