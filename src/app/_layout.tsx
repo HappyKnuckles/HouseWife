@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as Notifications from 'expo-notifications';
-import { Stack, useRouter } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import * as SystemUI from 'expo-system-ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -134,6 +135,48 @@ function ThemedRoot() {
   const { colors, scheme } = useAppTheme();
   const [queryClient] = useState(makeQueryClient);
 
+  /**
+   * The navigator's own theme, which is a separate thing from ours.
+   *
+   * Every navigator paints the container a screen mounts into with
+   * `theme.colors.background`, and expo-router's built-in default is
+   * `rgb(242, 242, 242)` — so the first time a tab was opened, that near-white
+   * showed for the frame between the scene being laid out and the screen
+   * painting itself. Which is why the flash happened in dark mode too: nothing
+   * about it came from our palette.
+   *
+   * `card` is the header/tab-bar surface and `border` its hairline; both are
+   * set here as well so a screen that does use a navigator header does not
+   * have to override them one by one.
+   */
+  const navigationTheme = useMemo(() => {
+    const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        primary: colors.primary,
+        background: colors.background,
+        card: colors.surface,
+        text: colors.text,
+        border: colors.border,
+        notification: colors.danger,
+      },
+    };
+  }, [scheme, colors]);
+
+  /**
+   * The native root view underneath React — what shows during a cold start and
+   * whenever the JS view tree is briefly not covering the window. Defaults to
+   * white, so it is the second half of the same flash.
+   *
+   * Runtime, unlike `userInterfaceStyle` in app.json, so it follows the theme
+   * toggle rather than needing a new binary.
+   */
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(colors.background);
+  }, [colors.background]);
+
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
       <SafeAreaProvider>
@@ -142,7 +185,9 @@ function ThemedRoot() {
             {/* expo-status-bar's "style" names the icon/text color, so a dark
                 background needs the light-content variant and vice versa. */}
             <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-            <RootNavigator />
+            <ThemeProvider value={navigationTheme}>
+              <RootNavigator />
+            </ThemeProvider>
           </AuthProvider>
         </QueryClientProvider>
       </SafeAreaProvider>
