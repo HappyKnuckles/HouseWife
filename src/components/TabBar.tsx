@@ -22,10 +22,15 @@ interface TabDefinition {
 const TABS: TabDefinition[] = [
   { name: 'index', title: 'Putzplan', icon: 'sparkles' },
   { name: 'todos', title: 'To-dos', icon: 'checkbox' },
-  { name: 'ausgaben', title: 'Ausgaben', icon: 'wallet' },
+  // Einkauf and Inventar are one errand seen from two ends — what is missing
+  // and what is there — so they sit next to each other and ahead of Ausgaben,
+  // which is the screen you open once a week while sitting down.
+  { name: 'einkaufsliste', title: 'Einkauf', icon: 'cart' },
   { name: 'inventar', title: 'Inventar', icon: 'cube' },
+  { name: 'ausgaben', title: 'Ausgaben', icon: 'wallet' },
   { name: 'termine', title: 'Termine', icon: 'calendar' },
   { name: 'regeln', title: 'Regeln', icon: 'book' },
+  { name: 'hunde', title: 'Hund', icon: 'paw' },
   { name: 'einstellungen', title: 'Einstellungen', icon: 'settings' },
 ];
 

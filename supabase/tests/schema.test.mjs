@@ -384,7 +384,7 @@ ok('checking off stamps done_at/done_by automatically',
 r = await as(USER_B, `update public.todos set is_done = false where id='${TODO}' returning done_at, done_by`);
 ok('unchecking clears them again', r.rows[0].done_at === null && r.rows[0].done_by === null);
 
-section('restock to-dos');
+section('restock → Einkaufsliste');
 // Only the cron ever calls this — it is revoked from `authenticated`, the same
 // way generate_due_recurring_expenses() is, so the tests drive it as the cron
 // does rather than as a member.
@@ -465,6 +465,65 @@ await as(USER_A, `update public.todos set is_done = true where id='${r.rows[0].i
 await runRestock();
 r = await as(USER_A, `select count(*)::int n from public.todos where source='restock'`);
 ok('ticking it off lets the next one be created', r.rows[0].n === 2, `got ${r.rows[0].n}`);
+
+// The whole point of migration 0024: generated rows belong to the shopping
+// list, hand-written ones to whichever list they were written on.
+r = await as(USER_A, `select count(*)::int n from public.todos
+                    where source='restock' and list <> 'shopping'`);
+ok('every generated row lands on the Einkaufsliste', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+r = await as(USER_A, `select list from public.todos where id='${TODO}'`);
+ok('a hand-written to-do stays on the to-do list', r.rows[0].list === 'todo', JSON.stringify(r.rows[0]));
+
+err = await asExpectError(USER_A, `update public.todos set list='todo'
+                                   where source='restock' and not is_done`);
+ok('a restock row cannot be moved off the Einkaufsliste', err !== null, 'the check let it through');
+
+section('inventory: angebrochene Packungen');
+await as(USER_A, `select * from public.inventory_scan_in(null, 'Zucker', '${LOC}', 2)`);
+r = await as(USER_A, `select i.id from public.inventory_items i
+                    join public.products p on p.id = i.product_id where p.name='Zucker'`);
+const SUGAR = r.rows[0].id;
+
+r = await as(USER_A, `select quantity::float q, (opened_at is not null) as opened
+                    from public.inventory_set_quantity('${SUGAR}', 1.5, true)`);
+ok('a lot can hold half a pack, marked as opened',
+   Number(r.rows[0].q) === 1.5 && r.rows[0].opened === true, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select delta::float d, reason from public.inventory_movements
+                    where item_id='${SUGAR}' order by created_at desc limit 1`);
+ok('...and it is logged as a correction, not as consumption',
+   Number(r.rows[0].d) === -0.5 && r.rows[0].reason === 'correction', JSON.stringify(r.rows[0]));
+
+// The reason fractions exist at all: a threshold of ½ must not fire while a
+// whole pack is still in the cupboard, and must fire once it is broken into.
+await as(USER_A, `update public.products set restock_min_quantity = 0.5 where name='Zucker'`);
+await as(USER_A, `select * from public.inventory_set_quantity('${SUGAR}', 1)`);
+r = await as(USER_A, `select is_low from public.v_inventory_totals where name='Zucker'`);
+ok('one whole pack against a ½ threshold is not low', r.rows[0].is_low === false, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select * from public.inventory_set_quantity('${SUGAR}', 0.5, true)`);
+r = await as(USER_A, `select is_low, total_quantity::float q from public.v_inventory_totals where name='Zucker'`);
+ok('...half a pack is', r.rows[0].is_low === true && Number(r.rows[0].q) === 0.5, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select title, list from public.todos
+                    where source='restock' and not is_done and title like 'Zucker%'`);
+ok('...and it writes itself onto the Einkaufsliste straight away',
+   r.rows.length === 1 && r.rows[0].list === 'shopping', JSON.stringify(r.rows));
+
+// Setting a lot to zero is the same "an empty lot is not inventory" rule
+// inventory_adjust() has followed since migration 0015.
+await as(USER_A, `select * from public.inventory_set_quantity('${SUGAR}', 0)`);
+r = await as(USER_A, `select count(*)::int n from public.inventory_items where id='${SUGAR}'`);
+ok('setting a lot to zero removes it', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+err = await asExpectError(USER_A, `select public.inventory_set_quantity('${SUGAR}', 1)`);
+ok('a lot that is gone cannot be set', err !== null, 'it unexpectedly succeeded');
+
+r = await as(USER_A, `select i.id from public.inventory_items i
+                    join public.products p on p.id = i.product_id where p.name='Butter' limit 1`);
+err = await asExpectError(USER_A, `select public.inventory_set_quantity('${r.rows[0].id}', -1)`);
+ok('a negative amount is rejected', err !== null, 'negative stock was accepted');
 
 section('events');
 await as(USER_A, `insert into public.events (household_id, kind, title, starts_on, repeat_yearly, created_by)
@@ -577,14 +636,50 @@ err = await asExpectError(USER_A, `insert into public.house_rules (household_id,
                                   values ('00000000-0000-0000-0000-000000000000', 'Fremde Regel')`);
 ok('a rule cannot be written into another household', err !== null, 'RLS let a foreign insert through');
 
+section('dog commands');
+await as(USER_A, `insert into public.dog_commands (household_id, command, description, created_by)
+                  values ('${HH}', 'Sitz', 'Hintern auf den Boden, bleibt bis „Okay“.', '${USER_A}')`);
+
+r = await as(USER_B, `select id, command, description from public.dog_commands where household_id='${HH}'`);
+ok('both members see the same commands',
+   r.rows.length === 1 && r.rows[0].command === 'Sitz' && !!r.rows[0].description,
+   JSON.stringify(r.rows));
+const COMMAND = r.rows[0].id;
+
+// Either of them may correct the other's wording — that is the entire point of
+// keeping this in one shared place.
+await as(USER_B, `update public.dog_commands set description='Hintern auf den Boden.' where id='${COMMAND}'`);
+r = await as(USER_A, `select description, (updated_at > created_at) as touched
+                    from public.dog_commands where id='${COMMAND}'`);
+ok('either member can edit, and updated_at is stamped',
+   r.rows[0].description === 'Hintern auf den Boden.' && r.rows[0].touched === true,
+   JSON.stringify(r.rows[0]));
+
+err = await asExpectError(USER_A, `insert into public.dog_commands (household_id, command)
+                                   values ('${HH}', '   ')`);
+ok('a blank command is rejected', err !== null, 'whitespace was accepted as a command');
+
+err = await asExpectError(USER_A, `insert into public.dog_commands (household_id, command)
+                                   values ('00000000-0000-0000-0000-000000000000', 'Fremd')`);
+ok('a command cannot be written into another household', err !== null, 'RLS let a foreign insert through');
+
+await as(USER_B, `delete from public.dog_commands where id='${COMMAND}'`);
+r = await as(USER_A, `select count(*)::int n from public.dog_commands`);
+ok('deleting removes it for both', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
 section('recurring expenses');
 await db.exec(`set role postgres;
   insert into public.recurring_expenses
     (household_id, name, category, amount_cents, paid_by, recurrence_unit, day_of_month, next_due_on, created_by)
   values
-    ('${HH}', 'Miete', 'Miete', 85000, '${USER_A}', 'month', 1, current_date - 5, '${USER_A}'),
+    -- The 1st of *this* month, not current_date - 5: a template due five days
+    -- ago advances to the next 1st, which on the 2nd or 3rd of a month is still
+    -- in the past — so the "re-running generates nothing" assertion below would
+    -- fail for the first few days of every month. Anchoring on the 1st makes
+    -- the fixture due today-or-earlier and its successor always in the future.
+    ('${HH}', 'Miete', 'Miete', 85000, '${USER_A}', 'month', 1, date_trunc('month', current_date)::date, '${USER_A}'),
     ('${HH}', 'Zu früh', 'Sonstiges', 1000, '${USER_A}', 'month', 1, current_date + 30, '${USER_A}'),
-    ('${HH}', 'Pausiert', 'Sonstiges', 2000, '${USER_A}', 'month', 1, current_date - 5, '${USER_A}');
+    ('${HH}', 'Pausiert', 'Sonstiges', 2000, '${USER_A}', 'month', 1, date_trunc('month', current_date)::date, '${USER_A}');
   update public.recurring_expenses set is_active = false where name = 'Pausiert';`);
 
 // next_due_on as text: PGlite hydrates dates into JS Date objects, which do

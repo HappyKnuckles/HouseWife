@@ -6,6 +6,7 @@ import type { EventInput } from '../../features/events/api';
 import { EventForm } from '../../features/events/components/EventForm';
 import { useCreateEvent } from '../../features/events/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { spacing } from '../../lib/theme';
 import { useThemedStyles } from '../../lib/theme-context';
 
@@ -21,7 +22,7 @@ export default function NewEventScreen() {
       await createEvent.mutateAsync(values);
       router.back();
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

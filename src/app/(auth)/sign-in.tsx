@@ -6,6 +6,7 @@ import { Screen } from '../../components/Screen';
 import { Card } from '../../components/Card';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { env } from '../../lib/env';
+import { errorMessage } from '../../lib/errors';
 import { spacing, typography } from '../../lib/theme';
 import { useThemedStyles } from '../../lib/theme-context';
 
@@ -38,7 +39,7 @@ export default function SignInScreen() {
     try {
       await signIn(person.email, person.password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setPending(null);
     }

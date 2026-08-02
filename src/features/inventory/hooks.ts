@@ -166,6 +166,25 @@ export function useAdjustQuantity() {
   });
 }
 
+export function useSetQuantity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      itemId,
+      quantity,
+      opened,
+      note,
+    }: {
+      itemId: string;
+      quantity: number;
+      /** Undefined leaves opened_at alone. */
+      opened?: boolean;
+      note?: string;
+    }) => api.setQuantity(itemId, quantity, opened, note),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
 export function useUpdateProduct() {
   const queryClient = useQueryClient();
   return useMutation({

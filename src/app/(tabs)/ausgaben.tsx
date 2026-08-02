@@ -12,6 +12,7 @@ import { useAuth } from '../../features/auth/AuthProvider';
 import { useExpenses, useMyBalance, useSettleUp } from '../../features/expenses/hooks';
 import { useMemberMap } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { formatCents, formatDate } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -87,7 +88,7 @@ export default function ExpensesScreen() {
             try {
               await settleUp.mutateAsync({ method: 'transfer' });
             } catch (err) {
-              Alert.alert('Fehlgeschlagen', err instanceof Error ? err.message : String(err));
+              Alert.alert('Fehlgeschlagen', errorMessage(err));
             }
           },
         },

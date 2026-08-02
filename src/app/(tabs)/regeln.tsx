@@ -14,6 +14,7 @@ import {
   useUpdateRule,
 } from '../../features/rules/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -76,7 +77,7 @@ export default function RulesScreen() {
       if (id) await updateRule.mutateAsync({ id, text: trimmed });
       else await addRule.mutateAsync(trimmed);
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

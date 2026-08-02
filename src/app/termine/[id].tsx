@@ -11,6 +11,7 @@ import { EventForm } from '../../features/events/components/EventForm';
 import { EVENT_KIND_LABEL, eventIcon, eventWhen, relativeDays } from '../../features/events/format';
 import { useDeleteEvent, useEvents, useUpdateEvent } from '../../features/events/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { formatDate } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -55,7 +56,7 @@ export default function EventDetailScreen() {
       await updateEvent.mutateAsync({ id, input: values });
       setEditing(false);
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

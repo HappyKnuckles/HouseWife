@@ -18,6 +18,7 @@ import {
 import { useMembers } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
 import type { RecurringExpenseUnit } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { formatCents, formatDate, parseAmountToCents, todayIso } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -136,7 +137,7 @@ export default function FixkostenScreen() {
       });
       resetForm();
     } catch (err) {
-      Alert.alert('Konnte nicht angelegt werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht angelegt werden', errorMessage(err));
     }
   }
 

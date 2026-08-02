@@ -17,6 +17,7 @@ import {
   useUpdateHousehold,
 } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { formatDateTime, relativeTime } from '../../lib/format';
 import { pushStatusMessage, registerPushToken, type PushRegistrationResult } from '../../lib/notifications';
 import { radius, spacing, typography } from '../../lib/theme';
@@ -83,7 +84,7 @@ export default function SettingsScreen() {
         message: `Tritt unserem Haushalt bei! Code: ${code}`,
       });
     } catch (err) {
-      Alert.alert('Fehlgeschlagen', err instanceof Error ? err.message : String(err));
+      Alert.alert('Fehlgeschlagen', errorMessage(err));
     }
   }
 
@@ -126,7 +127,7 @@ export default function SettingsScreen() {
       // button below into "Jetzt neu starten".
       await Updates.fetchUpdateAsync();
     } catch (err) {
-      Alert.alert('Update fehlgeschlagen', err instanceof Error ? err.message : String(err));
+      Alert.alert('Update fehlgeschlagen', errorMessage(err));
     }
   }
 

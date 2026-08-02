@@ -7,6 +7,7 @@ import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { useAuth } from '../features/auth/AuthProvider';
 import { useAcceptInvite, useCreateHousehold } from '../features/household/hooks';
+import { errorMessage } from '../lib/errors';
 import { spacing, typography } from '../lib/theme';
 import { useThemedStyles } from '../lib/theme-context';
 
@@ -41,7 +42,7 @@ export default function OnboardingScreen() {
     try {
       await createHousehold.mutateAsync({ name });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
   }
 

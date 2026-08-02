@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ActivityIndicator, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 
+import { errorMessage } from '../lib/errors';
 import { spacing, typography, type ThemeColors } from '../lib/theme';
 import { useAppTheme, useThemedStyles } from '../lib/theme-context';
 
@@ -75,7 +76,7 @@ export function LoadingState({ label = 'Lädt…' }: { label?: string }) {
 }
 
 export function ErrorState({ error, hint }: { error: unknown; hint?: string }) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   const styles = useThemedStyles(centeredStyles);
   return (
     <View style={styles.centered}>

@@ -1,8 +1,9 @@
 # Haushalt
 
 A household app for two people sharing one household: **Putzplan**, expense splitting,
-a shared to-do list, and barcode-scanned inventory. Everything syncs live between both
-phones — no manual refresh, no custom server.
+a shared to-do list, an Einkaufsliste that fills itself from the barcode-scanned
+inventory, and the dog's command list. Everything syncs live between both phones —
+no manual refresh, no custom server.
 
 - **Expo (React Native) + TypeScript**, mobile-first
 - **Supabase** for all of it: Postgres, Auth, Realtime, Storage, Edge Functions, RLS
@@ -26,7 +27,7 @@ phones — no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        24 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        27 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
     household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
@@ -36,7 +37,7 @@ supabase/
 src/
   app/               expo-router screens — every file here is a route
   components/        domain-agnostic primitives (Button, Card, Screen, …)
-  features/          expenses · todos · cleaning · inventory · events · rules · household · auth
+  features/          expenses · todos · cleaning · inventory · events · rules · dogs · household · auth
   lib/               typed Supabase client, realtime, notifications, formatting, theme
 docs/data-model.md   the design write-up
 ```
@@ -323,7 +324,7 @@ split rules, RLS enforcement, recurrence and rotation, and the inventory scan fl
 
 ```bash
 npm run test:db
-# 70 passed, 0 failed
+# 128 passed, 0 failed
 ```
 
 **The cron:** the app shows it under **Mehr → Server-Status**. Or query it directly:
@@ -486,13 +487,47 @@ constrains its own kind of row — and both stay usable as a PostgREST
 household-local date, so an empty staple nudges at most once per person per day
 and stops by itself once stock is back above the threshold.
 
-### A low staple writes itself onto the to-do list
+### Half a pack is a quantity
+
+`inventory_items.quantity` is `numeric(12,3)` and always was, but the only way to
+write it was the ±1 stepper — so the stock was whole packs whether or not the
+kitchen agreed. That gap lands squarely on the restock threshold: with whole
+packs only, "sag Bescheid, wenn nur noch eine da ist" fires while a sealed pack
+is still in the cupboard, and waiting for zero fires when it is already too late.
+Half a pack is the answer people actually mean.
+
+`inventory_set_quantity(item, quantity, opened, note)` sets a lot to an exact
+amount rather than nudging it. An RPC, because the delta the movement log needs
+can only be computed from the value the row has *right now* — doing that on the
+client means two phones that both read "2" can each write "1,5" and lose a pack.
+It computes the delta under a row lock and then goes through `inventory_adjust()`,
+so the log, the empty-lot cleanup and the restock triggers behave exactly as they
+do everywhere else instead of being reimplemented next door.
+
+On the product screen it is four chips — *noch ¾ · ½ · ¼ · aufgebraucht* — that
+say how much of the opened pack is left; the sealed ones beside it are left
+alone (`ceil(quantity) - 1`, so tapping ½ twice is not two half packs lost).
+`opened_at`, unused since the schema was written, is what it stamps. Thresholds
+take the same fractions, and quantities render as fractions rather than decimals
+everywhere they are shown, including in the push — "noch ½ Packung" reads like
+the cupboard, "0.5 piece" reads like a database.
+
+### A low staple writes itself onto the Einkaufsliste
 
 The push is a nudge that is gone once dismissed; what you need at the shop is a
-list, and there already is one. Any product with a `restock_min_quantity` — the
-switch on the product screen — gets an open `X kaufen` to-do while it is at or
-below that threshold, and loses it again when stock recovers. No second opt-in:
-having asked to be reminded *is* the opt-in.
+list. Any product with a `restock_min_quantity` — the switch on the product
+screen — gets an open `X kaufen` entry while it is at or below that threshold,
+and loses it again when stock recovers. No second opt-in: having asked to be
+reminded *is* the opt-in.
+
+Those entries live in `todos` under `list = 'shopping'`, which is the whole of
+what separates the Einkaufsliste from the to-do list. A shopping item is a to-do
+in every way that matters — title, checkbox, assignee, position, hard delete,
+same RLS, same realtime channel — and `todos` already carried the two columns
+only a shopping item uses (`product_id`, `source`). A second table would have
+been a copy of this one plus a second `sync_restock_todos()` to keep in step. A
+CHECK pins generated rows to the shopping list so one cannot be dragged onto the
+to-dos and vanish from the screen that owns it.
 
 `todos.source` separates the two kinds of row. A `'restock'` row is the
 generator's to manage; a `'manual'` one you wrote yourself is never touched,
@@ -509,8 +544,8 @@ still calls the same function afterwards as a safety net for anything that
 changed by another route.
 
 `created_by` stays NULL on a generated row — nobody wrote it, and putting one of
-the two members' faces on it would be a small lie. The to-dos screen marks them
-with a cart icon and links through to the product instead.
+the two members' faces on it would be a small lie. The Einkaufsliste marks them
+as *Bestand niedrig* and links through to the product instead.
 
 ### Termine, Jahrestage and Geburtstage are one table
 
@@ -535,6 +570,24 @@ a device with a wrong clock cannot invent an anniversary.
 Reminders reuse `notification_log` again, keyed on the *occurrence* date rather
 than today, so one event reminds once per person per occurrence however many
 hours the cron runs inside the lead-time window.
+
+### Hundekommandos are a glossary, not a log
+
+`dog_commands` is a word and what it means, shaped after `house_rules` — the
+simplest table that works, hard deletes, no soft-delete column to filter on in
+every query. Two differences. `description` is its own column rather than more
+text in the title, because it is what gets exported and what the dog-sitter
+reads, so it has to survive being rendered on its own. And there is no
+`position`: a rule list is a sequence you point at ("Regel 3"), a glossary is a
+set you look things up in, so it is ordered by `created_at` and nothing depends
+on a number staying attached to an entry.
+
+The export is plain text through the OS share sheet — no new dependency, and no
+file for the recipient to open. Whoever has the dog next is going to read it in
+WhatsApp, so the export *is* the thing they read. `renderDogCommands()` is
+separate from the sharing, so a future "als Datei speichern" produces exactly the
+same text; on web, where `navigator.share` mostly does not exist, it falls back
+to the clipboard.
 
 ### Categories are free text, everywhere
 
@@ -628,16 +681,19 @@ agree with `apply_expense_split()` cent for cent, and two copies of the item
 editor and shares validation would drift — you would only find out when the two
 screens disagreed about who owes what.
 
-### Seven screens, five slots
+### Nine screens, five slots
 
 The tab bar is ours (`src/components/TabBar.tsx`), passed to the navigator as
 `tabBar`. The navigator, routing and back behaviour are untouched — only the
 bar is custom, which is the cheapest place to put this decision.
 
 `TABS` in that file is the whole navigation order: the first four get a slot,
-everything after lives in a sheet behind **Mehr**. Seven labels across a phone
+everything after lives in a sheet behind **Mehr**. Nine labels across a phone
 is unreadable, and an app where every screen is one tap away is an app with no
-opinion about which screens matter.
+opinion about which screens matter. Today the four are Putzplan, To-dos, Einkauf
+and Inventar — the two supply screens next to each other, and Ausgaben in the
+sheet because settling up is something you sit down for. Reordering is moving a
+line in that list.
 
 The Mehr slot is not a tab of its own. When the current screen lives in the
 sheet, the slot wears that screen's icon, label and active tint — so "where am

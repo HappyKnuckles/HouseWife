@@ -41,8 +41,11 @@ function useNotificationRouting() {
     if (Platform.OS === 'web') return;
 
     function open(response: Notifications.NotificationResponse) {
-      const data = response.notification.request.content.data as { taskId?: string };
+      const data = response.notification.request.content.data as { taskId?: string; type?: string };
       if (data?.taskId) router.push(`/putzplan/${data.taskId}`);
+      // A restock push is about the Einkaufsliste, where the entry has already
+      // been written — not about the product page it came from.
+      else if (data?.type === 'restock') router.push('/einkaufsliste');
     }
 
     // A notification that launched the app from a cold start arrives here, not

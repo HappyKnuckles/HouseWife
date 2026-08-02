@@ -18,6 +18,7 @@ import {
 } from '../../features/inventory/hooks';
 import { Alert } from '../../lib/alert';
 import type { LocationPathRow } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -217,7 +218,7 @@ export default function ScanScreen() {
       setCreatingLocation(false);
       setTimeout(() => setSaved(null), 2500);
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

@@ -10,6 +10,7 @@ import {
 import { useCreateTask } from '../../features/cleaning/hooks';
 import { useMembers } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 
 export default function NewTaskScreen() {
   const router = useRouter();
@@ -40,7 +41,7 @@ export default function NewTaskScreen() {
     } catch (err) {
       Alert.alert(
         'Konnte nicht gespeichert werden',
-        err instanceof Error ? err.message : String(err),
+        errorMessage(err),
       );
     }
   }

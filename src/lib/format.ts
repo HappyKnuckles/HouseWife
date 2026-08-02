@@ -52,6 +52,77 @@ export function parseAmountToCents(input: string): number | null {
   return Math.round(value * 100);
 }
 
+/**
+ * Stock amounts.
+ *
+ * Quarters and halves render as fractions rather than decimals: an inventory
+ * that says "0,5" reads like a measurement, and "½" reads like half a packet —
+ * which is what it is, and the reason `quantity` is allowed to be fractional at
+ * all (migration 0025). Anything that is not a neat quarter falls back to a
+ * German decimal with the trailing zeros of numeric(12,3) trimmed off.
+ */
+const FRACTION_GLYPHS: Record<number, string> = { 0.25: '¼', 0.5: '½', 0.75: '¾' };
+
+export function formatQuantity(value: number): string {
+  // Rounded before anything else, so a float artefact (0.30000000000000004,
+  // or 0.9999 from repeated subtraction) cannot leak into the output.
+  const rounded = Math.round((Number.isFinite(value) ? value : 0) * 1000) / 1000;
+  const sign = rounded < 0 ? '−' : '';
+  const abs = Math.abs(rounded);
+
+  const whole = Math.floor(abs);
+  const glyph = FRACTION_GLYPHS[Number((abs - whole).toFixed(3))];
+  if (glyph) return `${sign}${whole === 0 ? '' : whole}${glyph}`;
+
+  return sign + abs.toFixed(3).replace(/\.?0+$/, '').replace('.', ',');
+}
+
+/**
+ * The inverse, forgiving of everything a quantity field can end up holding:
+ * "1,5", "1.5", and the "1½" that formatQuantity() itself puts there when a
+ * field is prefilled with the current stock.
+ */
+export function parseQuantity(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  let rest = trimmed;
+  let fraction = 0;
+  for (const [value, glyph] of Object.entries(FRACTION_GLYPHS)) {
+    if (rest.includes(glyph)) {
+      fraction = Number(value);
+      rest = rest.replace(glyph, '').trim();
+      break;
+    }
+  }
+
+  if (!rest) return fraction || null;
+
+  const whole = Number(rest.replace(',', '.'));
+  if (!Number.isFinite(whole) || whole < 0) return null;
+
+  return whole + fraction;
+}
+
+const UNIT_LABELS: Record<string, [singular: string, plural: string]> = {
+  piece: ['Stück', 'Stück'],
+  pack: ['Packung', 'Packungen'],
+  g: ['g', 'g'],
+  kg: ['kg', 'kg'],
+  ml: ['ml', 'ml'],
+  l: ['l', 'l'],
+};
+
+export function unitLabel(unit: string, quantity = 1): string {
+  const [singular, plural] = UNIT_LABELS[unit] ?? [unit, unit];
+  return quantity === 1 ? singular : plural;
+}
+
+/** "1½ Packungen", "250 g", "2 Stück". */
+export function formatQuantityWithUnit(quantity: number, unit: string): string {
+  return `${formatQuantity(quantity)} ${unitLabel(unit, quantity)}`;
+}
+
 const WEEKDAYS_SHORT = ['', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WEEKDAYS_LONG = ['', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 

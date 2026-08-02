@@ -1,11 +1,20 @@
-import type { TodoRow } from '../../lib/database.types';
+import type { TodoList, TodoRow } from '../../lib/database.types';
 import { supabase } from '../../lib/supabase';
 
-export async function fetchTodos(householdId: string): Promise<TodoRow[]> {
+/**
+ * One table, two lists.
+ *
+ * `list` is a required argument everywhere rather than an optional filter: the
+ * to-do screen and the Einkaufsliste each own exactly one of them, and a query
+ * that forgot to say which would quietly show the other list's rows. See
+ * migration 0024.
+ */
+export async function fetchTodos(householdId: string, list: TodoList): Promise<TodoRow[]> {
   const { data, error } = await supabase
     .from('todos')
     .select('*')
     .eq('household_id', householdId)
+    .eq('list', list)
     .order('is_done', { ascending: true })
     .order('position', { ascending: true })
     .order('created_at', { ascending: false });
@@ -16,6 +25,7 @@ export async function fetchTodos(householdId: string): Promise<TodoRow[]> {
 
 export async function addTodo(input: {
   householdId: string;
+  list: TodoList;
   title: string;
   assigneeId?: string | null;
   dueDate?: string | null;
@@ -26,6 +36,7 @@ export async function addTodo(input: {
     .from('todos')
     .insert({
       household_id: input.householdId,
+      list: input.list,
       title: input.title.trim(),
       assignee_id: input.assigneeId ?? null,
       due_date: input.dueDate ?? null,
@@ -70,11 +81,13 @@ export async function deleteTodo(todoId: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function clearCompleted(householdId: string): Promise<void> {
+/** Scoped to one list: clearing the shopping must not empty the to-dos. */
+export async function clearCompleted(householdId: string, list: TodoList): Promise<void> {
   const { error } = await supabase
     .from('todos')
     .delete()
     .eq('household_id', householdId)
+    .eq('list', list)
     .eq('is_done', true);
 
   if (error) throw error;

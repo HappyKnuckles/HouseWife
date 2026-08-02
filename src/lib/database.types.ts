@@ -64,6 +64,8 @@ export type MovementReason = 'scan_in' | 'manual_adjust' | 'consume' | 'move' | 
 export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock' | 'event';
 /** 'restock' rows are written by generate_restock_todos(), not by a person. */
 export type TodoSource = 'manual' | 'restock';
+/** The two lists `todos` carries. Restock rows are always on the shopping one. */
+export type TodoList = 'todo' | 'shopping';
 /** A Jahrestag or Geburtstag is an event that must repeat yearly. */
 export type EventKind = 'event' | 'anniversary' | 'birthday';
 export type Platform = 'ios' | 'android';
@@ -201,6 +203,7 @@ export type TodoRow = {
   position: number;
   product_id: string | null;
   source: TodoSource;
+  list: TodoList;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -238,6 +241,17 @@ export type HouseRuleRow = {
   household_id: string;
   text: string;
   position: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One entry of the household's shared dog vocabulary. */
+export type DogCommandRow = {
+  id: string;
+  household_id: string;
+  command: string;
+  description: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -588,8 +602,9 @@ export type Database = {
         RecurringExpenseRow,
         Stamps | 'currency' | 'recurrence_unit' | 'recurrence_interval' | 'next_due_on' | 'is_active'
       >;
-      todos: Table<TodoRow, Stamps | 'is_done' | 'position' | 'source' | 'product_id'>;
+      todos: Table<TodoRow, Stamps | 'is_done' | 'position' | 'source' | 'list' | 'product_id'>;
       house_rules: Table<HouseRuleRow, Stamps | 'position'>;
+      dog_commands: Table<DogCommandRow, Stamps>;
       events: Table<EventRow, Stamps | 'kind' | 'repeat_yearly' | 'remind_days_before'>;
       cleaning_areas: Table<CleaningAreaRow, Stamps | 'icon' | 'color' | 'sort_order'>;
       cleaning_tasks: Table<
@@ -708,6 +723,11 @@ export type Database = {
       inventory_move: {
         /** `p_quantity` null moves the whole lot. */
         Args: { p_item_id: string; p_location_id?: string | null; p_quantity?: number | null };
+        Returns: InventoryItemRow;
+      };
+      inventory_set_quantity: {
+        /** `p_opened` null leaves opened_at alone; fractions are the point. */
+        Args: { p_item_id: string; p_quantity: number; p_opened?: boolean | null; p_note?: string | null };
         Returns: InventoryItemRow;
       };
       update_location: {

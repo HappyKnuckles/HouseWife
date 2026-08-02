@@ -16,14 +16,29 @@ import {
   useLocations,
   useMoveItem,
   useProductCategories,
+  useSetQuantity,
   useSetRestockThreshold,
   useUpdateProduct,
 } from '../../../features/inventory/hooks';
-import { formatDate } from '../../../lib/format';
+import {
+  formatDate,
+  formatQuantity,
+  formatQuantityWithUnit,
+  parseQuantity,
+  unitLabel,
+} from '../../../lib/format';
 import { radius, spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 
-const THRESHOLD_CHOICES = [0, 1, 2, 3, 5];
+/**
+ * Thresholds worth one tap. The fractions are the point of the list: with whole
+ * packs only, "erinnere mich, wenn nur noch eine da ist" fires while a sealed
+ * pack is still in the cupboard, and waiting for zero fires too late.
+ */
+const THRESHOLD_CHOICES = [0, 0.25, 0.5, 1, 2, 3];
+
+/** How much of the opened pack is left. 0 = it is used up, the rest stay. */
+const OPEN_FRACTIONS = [0.75, 0.5, 0.25, 0];
 
 /**
  * One product: where its stock sits, and whether it is a staple.
@@ -79,7 +94,9 @@ export default function ProductDetailScreen() {
     empty: { ...typography.caption, color: c.textMuted },
     editActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
-    movePicker: { gap: spacing.sm, paddingBottom: spacing.md },
+    panel: { gap: spacing.md, paddingBottom: spacing.md },
+    panelLabel: { ...typography.captionStrong, color: c.textMuted },
+    inline: { flexDirection: 'row' as const, alignItems: 'flex-end' as const, gap: spacing.sm },
   }));
 
   const { data: totals, isLoading, error } = useInventoryTotals();
@@ -88,6 +105,7 @@ export default function ProductDetailScreen() {
   const setThreshold = useSetRestockThreshold();
   const updateProduct = useUpdateProduct();
   const moveItem = useMoveItem();
+  const setQuantity = useSetQuantity();
   const adjust = useAdjustQuantity();
   const { data: categories } = useProductCategories();
 
@@ -98,46 +116,87 @@ export default function ProductDetailScreen() {
   const [pendingThreshold, setPendingThreshold] = useState<number | null>(null);
   const threshold = pendingThreshold ?? product?.restock_min_quantity ?? null;
   const tracked = threshold !== null;
+  /** Free-text threshold, for the ones no chip covers ("≤ 250 g"). */
+  const [thresholdDraft, setThresholdDraft] = useState('');
 
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [draftBrand, setDraftBrand] = useState('');
   const [draftCategory, setDraftCategory] = useState('');
-  /** Which lot's location picker is open; null = none. */
-  const [movingLot, setMovingLot] = useState<string | null>(null);
+  /** Which lot's panel is open; null = none. */
+  const [openPanel, setOpenPanel] = useState<string | null>(null);
   /** How much of the open lot to move. Empty means all of it. */
   const [moveAmount, setMoveAmount] = useState('');
+  /** The exact-stock field, for amounts the quick chips do not cover. */
+  const [exactAmount, setExactAmount] = useState('');
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState error={error} />;
   if (!product) return <ErrorState error={new Error('Produkt nicht gefunden')} />;
 
-  // Only one picker is open at a time, so the amount can live in a single
-  // piece of state instead of one per row.
-  const openLot = (lots ?? []).find((lot) => lot.id === movingLot) ?? null;
+  // Only one panel is open at a time, so its drafts can live in a single piece
+  // of state instead of one per row.
+  const openLot = (lots ?? []).find((lot) => lot.id === openPanel) ?? null;
   const wholeLot = moveAmount.trim().length === 0;
-  const amount = wholeLot ? (openLot?.quantity ?? 0) : Number(moveAmount.replace(',', '.'));
+  const amount = wholeLot ? (openLot?.quantity ?? 0) : (parseQuantity(moveAmount) ?? NaN);
   const amountValid = !!openLot && Number.isFinite(amount) && amount > 0 && amount <= openLot.quantity;
   const partial = amountValid && !!openLot && amount < openLot.quantity;
 
-  function toggleLot(lotId: string, quantity: number) {
-    const opening = movingLot !== lotId;
-    setMovingLot(opening ? lotId : null);
+  const exact = parseQuantity(exactAmount);
+  const exactValid = exact !== null && exact >= 0;
+
+  function togglePanel(lotId: string, quantity: number) {
+    const opening = openPanel !== lotId;
+    setOpenPanel(opening ? lotId : null);
     // Prefill with the whole lot so the common case is one tap, and so the
     // field doubles as a reminder of how much is actually there.
     setMoveAmount(opening && quantity > 1 ? formatQuantity(quantity) : '');
+    setExactAmount(opening ? formatQuantity(quantity) : '');
   }
 
   function submitMove(lotId: string, locationId: string | null) {
     if (!amountValid) return;
     void moveItem.mutateAsync({ itemId: lotId, locationId, quantity: partial ? amount : null });
-    setMovingLot(null);
+    setOpenPanel(null);
     setMoveAmount('');
+  }
+
+  /**
+   * "Von der offenen Packung ist noch ½ übrig."
+   *
+   * The sealed packs beside it are whatever was there minus the one that is
+   * open — ceil() rather than floor() so the arithmetic is idempotent: a lot
+   * already sitting at 1,5 that gets tapped ½ again stays at 1,5 instead of
+   * quietly losing a pack each time.
+   */
+  function setOpenFraction(lotId: string, quantity: number, fraction: number) {
+    const sealed = Math.max(Math.ceil(quantity) - 1, 0);
+    void setQuantity.mutateAsync({
+      itemId: lotId,
+      quantity: sealed + fraction,
+      opened: fraction > 0,
+    });
+    setExactAmount(formatQuantity(sealed + fraction));
+  }
+
+  function applyExact(lotId: string) {
+    const value = parseQuantity(exactAmount);
+    if (value === null || value < 0) return;
+    void setQuantity.mutateAsync({ itemId: lotId, quantity: value });
+    setOpenPanel(null);
   }
 
   function applyThreshold(next: number | null) {
     setPendingThreshold(next);
+    setThresholdDraft('');
     void setThreshold.mutateAsync({ productId: id, threshold: next });
+  }
+
+  function applyThresholdDraft() {
+    const value = parseQuantity(thresholdDraft);
+    if (value === null || value < 0) return;
+    setPendingThreshold(value);
+    void setThreshold.mutateAsync({ productId: id, threshold: value });
   }
 
   function startEditing() {
@@ -163,7 +222,7 @@ export default function ProductDetailScreen() {
     <Screen edges={[]}>
       <Stack.Screen options={{ title: product.name }} />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {editing ? (
           <Card style={styles.card}>
             <TextField label="Produkt" value={draftName} onChangeText={setDraftName} autoFocus />
@@ -235,8 +294,8 @@ export default function ProductDetailScreen() {
             <Ionicons name="cart" size={16} color={colors.dueToday} />
             <Text style={styles.lowText}>
               {product.total_quantity <= 0
-                ? 'Nichts mehr da — steht auf der Nachkauf-Liste.'
-                : `Nur noch ${formatQuantity(product.total_quantity)} übrig — steht auf der Nachkauf-Liste.`}
+                ? 'Nichts mehr da — steht auf der Einkaufsliste.'
+                : `Nur noch ${formatQuantityWithUnit(product.total_quantity, product.unit)} übrig — steht auf der Einkaufsliste.`}
             </Text>
           </View>
         ) : null}
@@ -247,7 +306,7 @@ export default function ProductDetailScreen() {
             <View style={styles.switchText}>
               <Text style={styles.rowTitle}>Nachkauf-Erinnerung</Text>
               <Text style={styles.rowHint}>
-                Ihr bekommt beide eine Erinnerung, sobald der Bestand die Grenze erreicht.
+                Landet automatisch auf der Einkaufsliste, sobald der Bestand die Grenze erreicht.
               </Text>
             </View>
             <Switch
@@ -265,18 +324,36 @@ export default function ProductDetailScreen() {
                 <Text style={styles.rowHint}>
                   {threshold === 0
                     ? 'Erst wenn gar nichts mehr da ist.'
-                    : `Wenn ${formatQuantity(threshold ?? 0)} oder weniger übrig sind.`}
+                    : `Wenn ${formatQuantityWithUnit(threshold ?? 0, product.unit)} oder weniger übrig sind — eine angebrochene Packung zählt als Bruchteil.`}
                 </Text>
               </View>
               <View style={styles.chipRow}>
                 {THRESHOLD_CHOICES.map((choice) => (
                   <Chip
                     key={choice}
-                    label={choice === 0 ? 'Leer' : `≤ ${choice}`}
+                    label={choice === 0 ? 'Leer' : `≤ ${formatQuantity(choice)}`}
                     active={threshold === choice}
                     onPress={() => applyThreshold(choice)}
                   />
                 ))}
+              </View>
+              <View style={styles.inline}>
+                <View style={styles.flex}>
+                  <TextField
+                    value={thresholdDraft}
+                    onChangeText={setThresholdDraft}
+                    placeholder={`Eigene Grenze in ${unitLabel(product.unit, 0)}`}
+                    keyboardType="decimal-pad"
+                    returnKeyType="done"
+                    onSubmitEditing={applyThresholdDraft}
+                  />
+                </View>
+                <Button
+                  label="Setzen"
+                  variant="secondary"
+                  onPress={applyThresholdDraft}
+                  disabled={parseQuantity(thresholdDraft) === null}
+                />
               </View>
             </>
           ) : null}
@@ -294,33 +371,79 @@ export default function ProductDetailScreen() {
               <View key={lot.id}>
                 {index > 0 ? <View style={styles.divider} /> : null}
                 <Pressable
-                  onPress={() => toggleLot(lot.id, lot.quantity)}
+                  onPress={() => togglePanel(lot.id, lot.quantity)}
                   style={styles.lotRow}
                   accessibilityRole="button"
-                  accessibilityLabel="Ort ändern"
+                  accessibilityLabel="Menge und Ort ändern"
                 >
                   <Ionicons name="location-outline" size={16} color={colors.textFaint} />
                   <View style={styles.lotText}>
                     <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
-                    {lot.expires_on ? (
-                      <Text style={styles.lotMeta}>MHD {formatDate(lot.expires_on)}</Text>
+                    {lot.opened_at || lot.expires_on ? (
+                      <Text style={styles.lotMeta}>
+                        {[
+                          lot.opened_at ? 'angebrochen' : null,
+                          lot.expires_on ? `MHD ${formatDate(lot.expires_on)}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
                     ) : null}
                   </View>
                   <Text style={styles.lotQuantity}>
-                    {formatQuantity(lot.quantity)} {lot.unit}
+                    {formatQuantityWithUnit(lot.quantity, lot.unit)}
                   </Text>
                   <Ionicons
-                    name={movingLot === lot.id ? 'chevron-up' : 'chevron-down'}
+                    name={openPanel === lot.id ? 'chevron-up' : 'chevron-down'}
                     size={16}
                     color={colors.textFaint}
                   />
                 </Pressable>
 
-                {movingLot === lot.id ? (
-                  <View style={styles.movePicker}>
+                {openPanel === lot.id ? (
+                  <View style={styles.panel}>
+                    <Text style={styles.panelLabel}>Angebrochen</Text>
+                    <Text style={styles.rowHint}>
+                      Wie viel ist von der offenen {unitLabel(lot.unit)} noch übrig? Der Rest des
+                      Bestands bleibt, wie er ist.
+                    </Text>
+                    <View style={styles.chipRow}>
+                      {OPEN_FRACTIONS.map((fraction) => (
+                        <Chip
+                          key={fraction}
+                          label={fraction === 0 ? 'aufgebraucht' : `noch ${formatQuantity(fraction)}`}
+                          onPress={() => setOpenFraction(lot.id, lot.quantity, fraction)}
+                        />
+                      ))}
+                    </View>
+
+                    <View style={styles.inline}>
+                      <View style={styles.flex}>
+                        <TextField
+                          label="Genauer Bestand"
+                          value={exactAmount}
+                          onChangeText={setExactAmount}
+                          keyboardType="decimal-pad"
+                          selectTextOnFocus
+                          returnKeyType="done"
+                          onSubmitEditing={() => applyExact(lot.id)}
+                          error={exactValid ? null : 'Bitte eine Menge eingeben.'}
+                        />
+                      </View>
+                      <Button
+                        label="Übernehmen"
+                        variant="secondary"
+                        onPress={() => applyExact(lot.id)}
+                        disabled={!exactValid || exact === lot.quantity}
+                        loading={setQuantity.isPending}
+                      />
+                    </View>
+
+                    <View style={styles.divider} />
+
                     {lot.quantity > 1 ? (
                       <TextField
-                        label="Menge"
+                        label="Menge zum Verschieben"
                         value={moveAmount}
                         onChangeText={setMoveAmount}
                         keyboardType="decimal-pad"
@@ -372,8 +495,4 @@ export default function ProductDetailScreen() {
       </ScrollView>
     </Screen>
   );
-}
-
-function formatQuantity(quantity: number): string {
-  return Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(1).replace('.', ',');
 }

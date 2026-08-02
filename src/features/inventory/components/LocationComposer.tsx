@@ -7,6 +7,7 @@ import { Chip } from '../../../components/Segmented';
 import { TextField } from '../../../components/TextField';
 import { Alert } from '../../../lib/alert';
 import type { StorageLocationRow } from '../../../lib/database.types';
+import { errorMessage } from '../../../lib/errors';
 import { radius, spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 import { useCreateLocations, useLocations } from '../hooks';
@@ -86,7 +87,7 @@ export function LocationComposer({
       if (rows.length === 1) setParentId(rows[0].id);
       onCreated?.(rows);
     } catch (err) {
-      Alert.alert('Konnte nicht angelegt werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht angelegt werden', errorMessage(err));
     }
   }
 

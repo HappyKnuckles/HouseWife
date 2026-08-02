@@ -34,9 +34,12 @@ const TABLE_INVALIDATIONS: Record<string, Subscription> = {
   settlements: { keys: [['expenses']] },
   recurring_expenses: { keys: [['expenses']] },
 
+  // One table, two screens: ['todos'] is a prefix of both the to-do list's key
+  // and the Einkaufsliste's, so either one changing refetches whichever is open.
   todos: { keys: [['todos']] },
   house_rules: { keys: [['rules']] },
   events: { keys: [['events']] },
+  dog_commands: { keys: [['dog-commands']] },
 
   inventory_items: { keys: [['inventory']] },
   products: { keys: [['inventory']] },

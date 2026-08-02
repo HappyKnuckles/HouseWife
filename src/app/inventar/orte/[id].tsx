@@ -22,6 +22,7 @@ import {
   locationKindLabel,
 } from '../../../features/inventory/locations';
 import { Alert } from '../../../lib/alert';
+import { errorMessage } from '../../../lib/errors';
 import { radius, spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 
@@ -123,7 +124,7 @@ export default function LocationDetailScreen() {
       });
       setEditing(false);
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

@@ -390,6 +390,34 @@ export async function moveItem(
   return data as InventoryItemRow;
 }
 
+/**
+ * Sets a lot to an exact amount — "da ist noch eine halbe Packung drin".
+ *
+ * An RPC rather than an update on `quantity`, because the movement log has to
+ * record a delta and the delta can only be computed from the value the row
+ * actually has right now. Doing that here would mean subtracting from a number
+ * this device read some seconds ago. See migration 0025.
+ *
+ * `opened` marks the pack as broken into; leaving it undefined does not touch
+ * opened_at, so re-counting a sealed lot stays a re-count.
+ */
+export async function setQuantity(
+  itemId: string,
+  quantity: number,
+  opened?: boolean,
+  note?: string,
+): Promise<InventoryItemRow> {
+  const { data, error } = await supabase.rpc('inventory_set_quantity', {
+    p_item_id: itemId,
+    p_quantity: quantity,
+    p_opened: opened ?? null,
+    p_note: note ?? null,
+  });
+
+  if (error) throw error;
+  return data as InventoryItemRow;
+}
+
 export async function updateItem(
   itemId: string,
   patch: Partial<Pick<InventoryItemRow, 'location_id' | 'min_quantity' | 'expires_on' | 'note'>>,

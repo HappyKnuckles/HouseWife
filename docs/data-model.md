@@ -36,8 +36,9 @@ erDiagram
     settlements ||--o{ settlement_expenses : ""
     expenses ||--o{ settlement_expenses : ""
 
-    households ||--o{ todos : ""
+    households ||--o{ todos : "to-dos + Einkaufsliste"
     profiles ||--o{ todos : "assignee"
+    households ||--o{ dog_commands : ""
 
     households ||--o{ cleaning_areas : "rooms"
     cleaning_areas ||--o{ cleaning_tasks : ""
@@ -213,12 +214,14 @@ Only `status='open'` expenses count. Nets always sum to zero. The UI reads one r
 
 ---
 
-## 6. Feature 2 — Shared to-do list
+## 6. Feature 2 — Shared to-do list + Einkaufsliste
 
 ### `todos`
-`id`, `household_id`, `title text not null`, `notes`, `assignee_id uuid references profiles(id)` (nullable = anyone), `due_date date`, `is_done boolean not null default false`, `done_at`, `done_by`, `position numeric` (fractional indexing → drag-reorder without rewriting every row), `created_by`, timestamps.
+`id`, `household_id`, `title text not null`, `notes`, `assignee_id uuid references profiles(id)` (nullable = anyone), `due_date date`, `is_done boolean not null default false`, `done_at`, `done_by`, `position numeric` (fractional indexing → drag-reorder without rewriting every row), `list text not null default 'todo' check (list in ('todo','shopping'))`, `created_by`, timestamps.
 
 Deliberately boring. Realtime + optimistic checkbox, hard delete (with an undo snackbar client-side rather than a `deleted_at` column).
+
+> **`list` is one column instead of a second table** (migration 0024). A shopping item is a to-do in every way that matters — title, checkbox, assignee, position, hard delete, identical RLS, same realtime subscription — and this table already carried the two columns only a shopping item uses (`product_id`, `source`, added for the restock generator in 0020). A `shopping_items` table would have been a copy of this one plus a rewritten `sync_restock_todos()`, i.e. two of everything to keep in step. Each screen queries its own list; `todos_household_list_idx` puts `list` directly behind `household_id`, and a CHECK pins generated `'restock'` rows to `list = 'shopping'` so one cannot end up on a screen that does not show it.
 
 ---
 
@@ -305,12 +308,17 @@ Cheap to write, and it's what makes concurrent edits from two phones debuggable 
 ### `todos.source` / `todos.product_id`
 `source text check (source in ('manual','restock'))`, `product_id uuid` with a composite FK to `(products.id, household_id)`.
 
-A `'restock'` row is written and removed by `sync_restock_todos()` — triggers on `inventory_items` and on `products.restock_min_quantity` run it for one product, the hourly cron runs it for all of them. `unique (household_id, product_id) where source = 'restock' and not is_done` is what makes an hourly reconcile idempotent while still allowing a fresh to-do after the last one was ticked off. A `'manual'` row is never touched by the generator, even with an identical title.
+A `'restock'` row is written and removed by `sync_restock_todos()` — triggers on `inventory_items` and on `products.restock_min_quantity` run it for one product, the hourly cron runs it for all of them. It writes onto the Einkaufsliste (`list = 'shopping'`, see §6), which is the list you actually read at the shop. `unique (household_id, product_id) where source = 'restock' and not is_done` is what makes an hourly reconcile idempotent while still allowing a fresh entry after the last one was ticked off. A `'manual'` row is never touched by the generator, even with an identical title.
 
 `delta` is per **lot**, not per product, which is what makes `reason='move'` readable: a lot that simply changes shelf logs one row with `delta 0` (nothing about that lot's quantity changed), while stock moving *between* two lots — a merge, or a partial move — logs a `-n`/`+n` pair. Either way the move rows sum to zero, so a move can never invent or lose stock.
 
 ### `inventory_move(p_item_id, p_location_id, p_quantity)`
 Relocates stock. `p_quantity` null moves the whole lot; a smaller amount splits the lot, carrying `expires_on`, `opened_at` and `note` across because those describe the goods rather than the shelf. If the destination already holds the same product at the same expiry it merges instead — that is the *normal* case (putting the rest of the flour where the flour lives) and a plain `update … set location_id` would hit `inventory_items_lot_unique` there. Asking for more than the lot holds raises rather than clamping: moving silently less would leave stock where you believe it no longer is.
+
+### `inventory_set_quantity(p_item_id, p_quantity, p_opened, p_note)`
+Sets a lot to an exact amount — "da ist noch eine halbe Packung drin" — instead of nudging it by ±1. `quantity` was always `numeric(12,3)`; this is the write path that makes fractions reachable, and with them a `restock_min_quantity` of ½, which is the only way to express "erinnere mich, sobald die Packung angebrochen ist, aber nicht solange eine volle dasteht".
+
+An RPC for the same reason `inventory_move()` is one: the delta the movement log records can only be computed from the row's *current* value, so computing it on the client means two phones that both read `2` can each write `1,5` and lose a pack. It reads under `FOR UPDATE` and then delegates to `inventory_adjust()`, so the movement row (`reason = 'correction'`), the emptied-lot deletion and the restock triggers are the same code path as everywhere else rather than a second implementation of it. `p_opened` writes `opened_at` — NULL leaves it alone, so re-counting a sealed lot does not claim it was broken into.
 
 ---
 

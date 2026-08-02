@@ -12,7 +12,7 @@ import {
   useInventoryItems,
   useInventoryTotals,
 } from '../../features/inventory/hooks';
-import { formatDate } from '../../lib/format';
+import { formatDate, formatQuantity, formatQuantityWithUnit } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -42,6 +42,8 @@ export default function InventoryScreen() {
     restockCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, gap: spacing.sm },
     restockHeader: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.sm },
     restockTitle: { ...typography.micro, color: c.dueToday, textTransform: 'uppercase' as const },
+    restockLink: { ...typography.caption, color: c.dueToday },
+    flex: { flex: 1 },
     restockRow: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
@@ -158,10 +160,21 @@ export default function InventoryScreen() {
         ListHeaderComponent={
           lowStock.length > 0 && !search ? (
             <Card style={styles.restockCard}>
-              <View style={styles.restockHeader}>
+              {/* Every one of these already has a line on the Einkaufsliste,
+                  written by sync_restock_todos(). The header is the way over
+                  there; the rows below stay pointed at the products, which is
+                  the question this screen answers. */}
+              <Pressable
+                onPress={() => router.push('/einkaufsliste')}
+                style={styles.restockHeader}
+                accessibilityRole="button"
+                accessibilityLabel="Einkaufsliste öffnen"
+              >
                 <Ionicons name="cart" size={16} color={colors.dueToday} />
-                <Text style={styles.restockTitle}>Nachkaufen</Text>
-              </View>
+                <Text style={[styles.restockTitle, styles.flex]}>Nachkaufen</Text>
+                <Text style={styles.restockLink}>Einkaufsliste</Text>
+                <Ionicons name="chevron-forward" size={14} color={colors.dueToday} />
+              </Pressable>
               {lowStock.map((product) => (
                 <Pressable
                   key={product.product_id}
@@ -175,7 +188,7 @@ export default function InventoryScreen() {
                   <Text style={styles.restockQuantity}>
                     {product.total_quantity <= 0
                       ? 'leer'
-                      : `noch ${formatQuantity(product.total_quantity)}`}
+                      : `noch ${formatQuantityWithUnit(product.total_quantity, product.unit)}`}
                   </Text>
                   <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
                 </Pressable>
@@ -224,6 +237,7 @@ export default function InventoryScreen() {
                 <Text style={styles.itemMeta} numberOfLines={1}>
                   {item.storage_locations?.name ?? 'Ohne Ort'}
                   {item.products?.brand ? ` · ${item.products.brand}` : ''}
+                  {item.opened_at ? ' · angebrochen' : ''}
                 </Text>
                 {low || expiringSoon ? (
                   <Text style={styles.itemWarning}>
@@ -261,8 +275,4 @@ export default function InventoryScreen() {
       />
     </Screen>
   );
-}
-
-function formatQuantity(quantity: number): string {
-  return Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(1).replace('.', ',');
 }

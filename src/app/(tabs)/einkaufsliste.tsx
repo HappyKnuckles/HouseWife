@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
@@ -23,7 +24,17 @@ import { errorMessage } from '../../lib/errors';
 import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
-export default function TodosScreen() {
+/**
+ * Einkaufsliste — the same machinery as the to-do list over the same table,
+ * filtered to `list = 'shopping'` (migration 0024).
+ *
+ * What makes it its own screen rather than a section on the to-dos: this is
+ * the one the app writes to by itself. Every staple that falls to its restock
+ * threshold appears here within the same second the stock changes, so the list
+ * is already right by the time you are standing in the shop — and those rows
+ * carry a link back to the product, which a hand-written line cannot.
+ */
+export default function ShoppingListScreen() {
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
     clear: { ...typography.caption, color: c.primary },
@@ -58,29 +69,32 @@ export default function TodosScreen() {
     rowTitle: { ...typography.body, color: c.text },
     rowTitleDone: { textDecorationLine: 'line-through' as const, color: c.textMuted },
     rowMeta: { ...typography.caption, color: c.textFaint },
+    metaRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
     composerActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
   }));
-  const { data: todos, isLoading, isRefetching, refetch, error } = useTodos('todo');
+
+  const { data: items, isLoading, isRefetching, refetch, error } = useTodos('shopping');
   const { data: members } = useMembers();
   const memberMap = useMemberMap();
 
-  const addTodo = useAddTodo('todo');
-  const updateTodo = useUpdateTodo();
-  const toggleTodo = useToggleTodo('todo');
-  const deleteTodo = useDeleteTodo('todo');
-  const clearCompleted = useClearCompleted('todo');
+  const router = useRouter();
+  const addItem = useAddTodo('shopping');
+  const updateItem = useUpdateTodo();
+  const toggleItem = useToggleTodo('shopping');
+  const deleteItem = useDeleteTodo('shopping');
+  const clearBought = useClearCompleted('shopping');
 
   const [title, setTitle] = useState('');
   const [assignee, setAssignee] = useState<string | null>(null);
-  /** Which to-do the composer is currently editing; null = writing a new one. */
+  /** Which entry the composer is currently editing; null = writing a new one. */
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  if (isLoading) return <LoadingState label="To-dos werden geladen…" />;
+  if (isLoading) return <LoadingState label="Einkaufsliste wird geladen…" />;
   if (error) return <ErrorState error={error} />;
 
-  const open = (todos ?? []).filter((t) => !t.is_done);
-  const done = (todos ?? []).filter((t) => t.is_done);
+  const open = (items ?? []).filter((t) => !t.is_done);
+  const bought = (items ?? []).filter((t) => t.is_done);
 
   async function submit() {
     const trimmed = title.trim();
@@ -92,17 +106,17 @@ export default function TodosScreen() {
     setAssignee(null);
 
     try {
-      if (id) await updateTodo.mutateAsync({ id, patch: { title: trimmed, assignee_id: assignee } });
-      else await addTodo.mutateAsync({ title: trimmed, assigneeId: assignee });
+      if (id) await updateItem.mutateAsync({ id, patch: { title: trimmed, assignee_id: assignee } });
+      else await addItem.mutateAsync({ title: trimmed, assigneeId: assignee });
     } catch (err) {
       Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 
-  function startEditing(todo: { id: string; title: string; assignee_id: string | null }) {
-    setEditingId(todo.id);
-    setTitle(todo.title);
-    setAssignee(todo.assignee_id);
+  function startEditing(item: { id: string; title: string; assignee_id: string | null }) {
+    setEditingId(item.id);
+    setTitle(item.title);
+    setAssignee(item.assignee_id);
   }
 
   function cancelEditing() {
@@ -114,12 +128,12 @@ export default function TodosScreen() {
   return (
     <Screen>
       <ScreenHeader
-        title="To-dos"
-        subtitle={open.length === 0 ? 'Nichts offen' : `${open.length} offen`}
+        title="Einkaufsliste"
+        subtitle={open.length === 0 ? 'Nichts zu holen' : `${open.length} auf der Liste`}
         right={
-          done.length > 0 ? (
-            <Pressable onPress={() => void clearCompleted.mutateAsync()} hitSlop={8}>
-              <Text style={styles.clear}>Erledigte löschen</Text>
+          bought.length > 0 ? (
+            <Pressable onPress={() => void clearBought.mutateAsync()} hitSlop={8}>
+              <Text style={styles.clear}>Gekauftes löschen</Text>
             </Pressable>
           ) : undefined
         }
@@ -129,7 +143,7 @@ export default function TodosScreen() {
         <TextField
           value={title}
           onChangeText={setTitle}
-          placeholder={editingId ? 'To-do ändern…' : 'Was muss erledigt werden?'}
+          placeholder={editingId ? 'Eintrag ändern…' : 'Was fehlt? z. B. Milch'}
           returnKeyType="done"
           onSubmitEditing={() => void submit()}
         />
@@ -152,7 +166,7 @@ export default function TodosScreen() {
               label="Speichern"
               onPress={() => void submit()}
               disabled={title.trim().length === 0}
-              loading={updateTodo.isPending}
+              loading={updateItem.isPending}
               style={styles.flex}
             />
           </View>
@@ -160,17 +174,22 @@ export default function TodosScreen() {
       </View>
 
       <FlatList
-        data={[...open, ...done]}
+        data={[...open, ...bought]}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={
           <RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />
         }
         ListEmptyComponent={
-          <EmptyState title="Alles erledigt" body="Neue Aufgaben landen hier — bei euch beiden sofort." />
+          <EmptyState
+            title="Nichts zu holen"
+            body="Was ihr aufschreibt steht sofort auf beiden Handys — und was im Inventar zur Neige geht, landet von selbst hier."
+          />
         }
         renderItem={({ item }) => {
           const person = item.assignee_id ? memberMap[item.assignee_id] : null;
+          // Written by sync_restock_todos(), not by either of you.
+          const fromInventory = item.source === 'restock';
 
           return (
             <View
@@ -183,7 +202,7 @@ export default function TodosScreen() {
               <Pressable
                 onPress={() => {
                   void Haptics.selectionAsync();
-                  void toggleTodo.mutateAsync({ id: item.id, isDone: !item.is_done });
+                  void toggleItem.mutateAsync({ id: item.id, isDone: !item.is_done });
                 }}
                 hitSlop={8}
                 accessibilityRole="checkbox"
@@ -202,13 +221,33 @@ export default function TodosScreen() {
                 <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
                   {item.title}
                 </Text>
-                {person ? <Text style={styles.rowMeta}>für {person.display_name}</Text> : null}
+                {fromInventory ? (
+                  <View style={styles.metaRow}>
+                    <Ionicons name="cube-outline" size={12} color={colors.textFaint} />
+                    <Text style={styles.rowMeta}>
+                      Bestand niedrig{person ? ` · für ${person.display_name}` : ''}
+                    </Text>
+                  </View>
+                ) : person ? (
+                  <Text style={styles.rowMeta}>für {person.display_name}</Text>
+                ) : null}
               </Pressable>
 
-              {person ? <Avatar name={person.display_name} color={person.color} size={24} /> : null}
+              {fromInventory && item.product_id ? (
+                <Pressable
+                  onPress={() => router.push(`/inventar/produkt/${item.product_id}`)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Produkt öffnen"
+                >
+                  <Ionicons name="open-outline" size={18} color={colors.textFaint} />
+                </Pressable>
+              ) : person ? (
+                <Avatar name={person.display_name} color={person.color} size={24} />
+              ) : null}
 
               <Pressable
-                onPress={() => void deleteTodo.mutateAsync(item.id)}
+                onPress={() => void deleteItem.mutateAsync(item.id)}
                 hitSlop={8}
                 accessibilityLabel={`${item.title} löschen`}
               >

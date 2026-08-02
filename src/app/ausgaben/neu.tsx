@@ -16,6 +16,7 @@ import { useCreateExpense, useUploadReceipt } from '../../features/expenses/hook
 import { requestOcr } from '../../features/expenses/ocr';
 import { useMembers } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
+import { errorMessage } from '../../lib/errors';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -75,7 +76,7 @@ export default function NewExpenseScreen() {
 
       router.back();
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     } finally {
       setSaving(false);
     }

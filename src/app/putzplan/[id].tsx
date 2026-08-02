@@ -19,6 +19,7 @@ import {
 import { useMemberMap } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
 import type { CleaningTaskRow } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { dueLabel, formatDate, recurrenceLabel, relativeTime } from '../../lib/format';
 import { getStatusColor, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -76,7 +77,7 @@ export default function TaskDetailScreen() {
       await updateTask.mutateAsync({ taskId: id, patch: values });
       setEditing(false);
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 

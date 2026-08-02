@@ -11,6 +11,8 @@ import { TextField } from '../../components/TextField';
 import { useLocations, useProductSearch, useScanIn } from '../../features/inventory/hooks';
 import { Alert } from '../../lib/alert';
 import type { ProductRow, ProductUnit } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
+import { parseQuantity } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -96,6 +98,11 @@ export default function ManualAddScreen() {
   const canSave = name.trim().length > 0 && !scanIn.isPending;
 
   async function save() {
+    // Fractions are deliberate, not a typo to round away: "0,5" is half a pack
+    // you already opened. Anything unreadable falls back to one rather than
+    // failing the save on a stray character.
+    const parsed = parseQuantity(quantity);
+
     try {
       await scanIn.mutateAsync({
         // Passing the picked product's barcode makes the server-side match
@@ -106,12 +113,12 @@ export default function ManualAddScreen() {
         name: name.trim(),
         brand: brand.trim() || null,
         locationId,
-        quantity: Number(quantity.replace(',', '.')) || 1,
+        quantity: parsed && parsed > 0 ? parsed : 1,
         unit,
       });
       router.back();
     } catch (err) {
-      Alert.alert('Konnte nicht gespeichert werden', err instanceof Error ? err.message : String(err));
+      Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 
@@ -172,6 +179,7 @@ export default function ManualAddScreen() {
           value={quantity}
           onChangeText={setQuantity}
           keyboardType="decimal-pad"
+          hint="Auch angebrochen: 0,5 ist eine halbe Packung."
         />
 
         <Text style={styles.label}>Einheit</Text>

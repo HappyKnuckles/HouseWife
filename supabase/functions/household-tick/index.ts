@@ -16,7 +16,7 @@
  *      Also unconditional — a bill's due date does not depend on a
  *      household's chosen reminder hour.
  *
- *   3. RESTOCK TO-DOS. Keeps one open "X kaufen" to-do per staple that has
+ *   3. EINKAUFSLISTE. Keeps one open "X kaufen" entry per staple that has
  *      fallen to its threshold, and removes it again once stock recovers.
  *      Unconditional too: the shopping list should be right whenever it is
  *      opened, not only after the household's reminder hour has passed.
@@ -101,6 +101,34 @@ interface LowStockProduct {
   total_quantity: number;
   restock_min_quantity: number;
   unit: string;
+}
+
+/**
+ * "1½ Packungen", "250 g".
+ *
+ * A deliberate second copy of src/lib/format.ts — an Edge Function runs on Deno
+ * and cannot import from the app bundle. Kept to the two rules that matter in a
+ * push: fractions read as fractions (a staple threshold of ½ is the whole point
+ * of migration 0025, and "0.5 piece" would undo it), and the unit is a German
+ * word rather than the raw enum value.
+ */
+const UNIT_LABELS: Record<string, [singular: string, plural: string]> = {
+  piece: ['Stück', 'Stück'],
+  pack: ['Packung', 'Packungen'],
+};
+const FRACTION_GLYPHS: Record<string, string> = { '0.25': '¼', '0.5': '½', '0.75': '¾' };
+
+function formatAmount(quantity: number, unit: string): string {
+  const value = Math.round(quantity * 1000) / 1000;
+  const whole = Math.floor(value);
+  const glyph = FRACTION_GLYPHS[(value - whole).toFixed(3).replace(/0+$/, '')];
+
+  const amount = glyph
+    ? `${whole === 0 ? '' : whole}${glyph}`
+    : value.toFixed(3).replace(/\.?0+$/, '').replace('.', ',');
+
+  const [singular, plural] = UNIT_LABELS[unit] ?? [unit, unit];
+  return `${amount} ${value === 1 ? singular : plural}`;
 }
 
 /** "Now" in a household's own timezone, as a plain date plus the local hour. */
@@ -308,7 +336,7 @@ Deno.serve(async (req) => {
   }
 
   // --------------------------------------------------------------------------
-  // 1.6 RESTOCK TO-DOS — unconditional as well. The push in job 2a is a nudge
+  // 1.6 EINKAUFSLISTE — unconditional as well. The push in job 2a is a nudge
   // at the household's chosen hour; the list has to be right whenever someone
   // opens it, including at the shop at 9 in the morning. Own try/catch for the
   // same reason as the others.
@@ -369,9 +397,11 @@ Deno.serve(async (req) => {
         const restockPending: PendingNotification[] = lowStock.flatMap((p) => {
           const empty = Number(p.total_quantity) <= 0;
           const title = empty ? `🛒 ${p.name} ist alle` : `🛒 ${p.name} wird knapp`;
+          // Job 3 above has already put this on the Einkaufsliste, so the push
+          // says where it is rather than asking.
           const body = empty
-            ? 'Nichts mehr da — auf die Einkaufsliste?'
-            : `Nur noch ${Number(p.total_quantity)} ${p.unit} übrig.`;
+            ? 'Nichts mehr da — steht auf der Einkaufsliste.'
+            : `Nur noch ${formatAmount(Number(p.total_quantity), p.unit)} übrig — steht auf der Einkaufsliste.`;
 
           return memberIds.map((profileId) => ({
             household_id: household.id,
