@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 
@@ -22,6 +22,7 @@ import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
 export default function NewExpenseScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ title?: string; category?: string }>();
   const { profile } = useAuth();
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
@@ -87,7 +88,14 @@ export default function NewExpenseScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <ExpenseForm
           members={members ?? []}
-          initial={{ paidBy: profile?.id ?? null }}
+          // `title`/`category` come in as query params when another screen
+          // hands over — the Einkaufsliste checkout does, so the shop you just
+          // finished arrives here already named instead of being retyped.
+          initial={{
+            paidBy: profile?.id ?? null,
+            title: typeof params.title === 'string' ? params.title : undefined,
+            category: typeof params.category === 'string' ? params.category : undefined,
+          }}
           submitLabel="Ausgabe speichern"
           submitting={saving}
           onSubmit={(values) => void save(values)}

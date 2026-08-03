@@ -418,6 +418,31 @@ export async function setQuantity(
   return data as InventoryItemRow;
 }
 
+/**
+ * Books bought stock onto a known product — the way back from the
+ * Einkaufsliste into the inventory.
+ *
+ * Not scanIn(): that resolves a product by barcode or by name, and a shopping
+ * row already knows its `product_id`. Going back through the name could top up
+ * the wrong catalog entry when two products share one. See migration 0029.
+ */
+export async function addStock(input: {
+  productId: string;
+  quantity?: number;
+  locationId?: string | null;
+  note?: string | null;
+}): Promise<InventoryItemRow> {
+  const { data, error } = await supabase.rpc('inventory_add_stock', {
+    p_product_id: input.productId,
+    p_quantity: input.quantity ?? 1,
+    p_location_id: input.locationId ?? null,
+    p_note: input.note ?? null,
+  });
+
+  if (error) throw error;
+  return data as InventoryItemRow;
+}
+
 export async function updateItem(
   itemId: string,
   patch: Partial<Pick<InventoryItemRow, 'location_id' | 'min_quantity' | 'expires_on' | 'note'>>,

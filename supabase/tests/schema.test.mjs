@@ -534,6 +534,92 @@ r = await as(USER_A, `select i.id from public.inventory_items i
 err = await asExpectError(USER_A, `select public.inventory_set_quantity('${r.rows[0].id}', -1)`);
 ok('a negative amount is rejected', err !== null, 'negative stock was accepted');
 
+section('Einkaufshistorie');
+// Three purchases, ten days apart, with the middle one spelled differently and
+// padded — done_at is passed explicitly, which the stamp trigger preserves.
+await as(USER_A, `insert into public.todos (household_id, list, title, is_done, done_at, done_by)
+                  values ('${HH}', 'shopping', 'Kaffee',  true, now() - interval '30 days', '${USER_A}'),
+                         ('${HH}', 'shopping', ' kaffee', true, now() - interval '20 days', '${USER_B}'),
+                         ('${HH}', 'shopping', 'Kaffee',  true, now() - interval '10 days', '${USER_A}')`);
+
+r = await as(USER_A, `select name, times_bought, avg_interval_days::float i,
+                             days_since_bought d, is_due
+                      from public.v_shopping_suggestions where item_key = 'kaffee'`);
+ok('spelling variants collapse into one suggestion', r.rows[0].times_bought === 3, JSON.stringify(r.rows));
+ok('...with the most recent spelling as the label', r.rows[0].name === 'Kaffee', r.rows[0].name);
+ok('...and the rhythm between purchases', Number(r.rows[0].i) === 10, JSON.stringify(r.rows[0]));
+ok('...so it reads as due again', r.rows[0].is_due === true && r.rows[0].d === 10, JSON.stringify(r.rows[0]));
+
+// One purchase is not a rhythm, however long ago it was.
+await as(USER_A, `insert into public.todos (household_id, list, title, is_done, done_at, done_by)
+                  values ('${HH}', 'shopping', 'Wachsmalstifte', true, now() - interval '400 days', '${USER_A}')`);
+r = await as(USER_A, `select times_bought, avg_interval_days, is_due
+                      from public.v_shopping_suggestions where item_key = 'wachsmalstifte'`);
+ok('a one-off never becomes a suggestion to repeat',
+   r.rows[0].times_bought === 1 && r.rows[0].avg_interval_days === null && r.rows[0].is_due === false,
+   JSON.stringify(r.rows[0]));
+
+// The receipt side of the same name: prices come from expense_items, which the
+// list itself never records.
+await as(USER_A, `select * from public.create_expense('Rewe', 449, '${USER_A}', 'items', now(), null,
+      'Lebensmittel', '[{"name":" KAFFEE ","total_cents":449}]'::jsonb)`);
+r = await as(USER_A, `select last_price_cents::int p, times_paid
+                      from public.v_shopping_suggestions where item_key = 'kaffee'`);
+ok('the receipt history joins onto the same item',
+   Number(r.rows[0].p) === 449 && r.rows[0].times_paid === 1, JSON.stringify(r.rows[0]));
+
+// The whole point of soft-clearing: tidying the screen must not cost the memory.
+await as(USER_A, `update public.todos set cleared_at = now()
+                  where list = 'shopping' and is_done and cleared_at is null`);
+r = await as(USER_A, `select times_bought from public.v_shopping_suggestions where item_key = 'kaffee'`);
+ok('clearing the list keeps the history', r.rows[0].times_bought === 3, JSON.stringify(r.rows));
+
+section('Einkauf → Inventar');
+r = await as(USER_A, `select id, default_location_id from public.products where name = 'Zucker'`);
+const SUGAR_PRODUCT = r.rows[0].id;
+const SUGAR_HOME = r.rows[0].default_location_id;
+
+// Zucker was emptied in the open-packs section, so it is on the Einkaufsliste
+// right now. Buying it is what should end that.
+r = await as(USER_A, `select count(*)::int n from public.todos
+                      where source = 'restock' and not is_done and title = 'Zucker'`);
+ok('an empty staple is on the list before the shop', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+r = await as(USER_A, `select quantity::float q, location_id
+                      from public.inventory_add_stock('${SUGAR_PRODUCT}', 2)`);
+ok('buying it books the stock back in', Number(r.rows[0].q) === 2, JSON.stringify(r.rows[0]));
+// Nobody unpacking shopping should have to answer "welches Regal" for the
+// sugar that has lived in the same cupboard for a year.
+ok('...into the place it normally lives',
+   r.rows[0].location_id === SUGAR_HOME && SUGAR_HOME !== null,
+   `${r.rows[0].location_id} vs ${SUGAR_HOME}`);
+
+r = await as(USER_A, `select delta::float d, reason from public.inventory_movements
+                      where product_id = '${SUGAR_PRODUCT}' order by created_at desc limit 1`);
+ok('...logged as stock coming in',
+   Number(r.rows[0].d) === 2 && r.rows[0].reason === 'scan_in', JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select count(*)::int n from public.todos
+                      where source = 'restock' and not is_done and title = 'Zucker'`);
+ok('...and the Einkaufsliste entry disappears by itself', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+err = await asExpectError(USER_A, `select public.inventory_add_stock(
+        '00000000-0000-0000-0000-000000000000', 1)`);
+ok('a product from nowhere cannot be stocked', err !== null, 'it unexpectedly succeeded');
+
+err = await asExpectError(USER_A, `select public.inventory_add_stock('${SUGAR_PRODUCT}', 0)`);
+ok('nor can nothing be stocked', err !== null, 'zero quantity was accepted');
+
+// The link back to the money, and what happens when the money is deleted.
+r = await as(USER_A, `select id from public.expenses where title = 'Rewe'`);
+const REWE = r.rows[0].id;
+await as(USER_A, `update public.todos set expense_id = '${REWE}'
+                  where list = 'shopping' and lower(btrim(title)) = 'kaffee'`);
+await as(USER_A, `delete from public.expenses where id = '${REWE}'`);
+r = await as(USER_A, `select count(*)::int n from public.todos
+                      where lower(btrim(title)) = 'kaffee' and expense_id is null`);
+ok('deleting the expense keeps the purchases, minus the link', r.rows[0].n === 3, `got ${r.rows[0].n}`);
+
 section('events');
 await as(USER_A, `insert into public.events (household_id, kind, title, starts_on, repeat_yearly, created_by)
                   values ('${HH}', 'anniversary', 'Zusammen', current_date - 800, true, '${USER_A}')`);

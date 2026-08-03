@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
@@ -14,14 +14,20 @@ import {
   useAddTodo,
   useClearCompleted,
   useDeleteTodo,
+  useSetQuantity,
+  useShoppingSuggestions,
   useTodos,
   useToggleTodo,
   useUpdateTodo,
 } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
 import { errorMessage } from '../../lib/errors';
+import { formatQuantity } from '../../lib/format';
 import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
+
+/** How many quick-add chips fit before the row stops being scannable. */
+const SUGGESTION_LIMIT = 12;
 
 /**
  * Einkaufsliste — the same machinery as the to-do list over the same table,
@@ -42,7 +48,16 @@ import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 export default function ShoppingListScreen() {
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
-    clear: { ...typography.caption, color: c.primary },
+    clear: { ...typography.caption, color: c.primary, textAlign: 'center' as const },
+    footer: {
+      gap: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.md,
+      borderTopWidth: 1,
+      borderTopColor: c.border,
+      backgroundColor: c.surface,
+    },
     composer: { paddingHorizontal: spacing.lg, gap: spacing.sm, paddingBottom: spacing.md },
     list: { paddingBottom: spacing.xxl * 2 },
     row: {
@@ -74,11 +89,65 @@ export default function ShoppingListScreen() {
     rowTitleDone: { textDecorationLine: 'line-through' as const, color: c.textMuted },
     rowMeta: { ...typography.caption, color: c.textFaint },
     metaRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
+    stepper: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      backgroundColor: c.surfaceMuted,
+      borderRadius: radius.pill,
+      paddingHorizontal: 2,
+    },
+    stepperButton: {
+      width: 28,
+      height: 28,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    stepperValue: {
+      ...typography.captionStrong,
+      color: c.text,
+      minWidth: 22,
+      textAlign: 'center' as const,
+    },
     composerActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
+    suggestionsLabel: {
+      ...typography.micro,
+      color: c.textMuted,
+      textTransform: 'uppercase' as const,
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.xs,
+    },
+    // A horizontal ScrollView defaults to flexGrow: 1, so it claims the space
+    // between the composer and the list — and its row content container
+    // stretches every chip to that height. Both halves need saying: flexGrow 0
+    // so the strip is only as tall as a chip, alignItems so a chip is only as
+    // tall as its text.
+    suggestionsScroll: { flexGrow: 0 },
+    suggestions: {
+      paddingHorizontal: spacing.lg,
+      gap: spacing.sm,
+      paddingBottom: spacing.md,
+      alignItems: 'center' as const,
+    },
+    suggestion: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 6,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+    },
+    suggestionDue: { borderColor: c.dueToday, backgroundColor: c.dueTodaySoft },
+    suggestionLabel: { ...typography.caption, color: c.text },
+    suggestionMeta: { ...typography.caption, color: c.textFaint },
+    suggestionMetaDue: { color: c.dueToday },
   }));
 
   const { data: items, isLoading, isRefetching, refetch, error } = useTodos('shopping');
+  const { data: suggestions } = useShoppingSuggestions();
   const memberMap = useMemberMap();
 
   const router = useRouter();
@@ -87,16 +156,35 @@ export default function ShoppingListScreen() {
   const toggleItem = useToggleTodo('shopping');
   const deleteItem = useDeleteTodo('shopping');
   const clearBought = useClearCompleted('shopping');
+  const setQuantity = useSetQuantity('shopping');
 
   const [title, setTitle] = useState('');
   /** Which entry the composer is currently editing; null = writing a new one. */
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const open = useMemo(() => (items ?? []).filter((t) => !t.is_done), [items]);
+  const bought = useMemo(() => (items ?? []).filter((t) => t.is_done), [items]);
+
+  /**
+   * What to offer for one tap: the things this household buys, minus whatever
+   * is already on the list, with the ones whose usual interval has elapsed
+   * first. Most of a weekly shop is the same twenty items, and typing them out
+   * again every week is the whole reason shopping lists get abandoned.
+   */
+  const quickAdd = useMemo(() => {
+    const onList = new Set((items ?? []).map((t) => t.title.trim().toLowerCase()));
+
+    return (suggestions ?? [])
+      .filter((s) => !onList.has(s.item_key))
+      .sort((a, b) => {
+        if (!!a.is_due !== !!b.is_due) return a.is_due ? -1 : 1;
+        return b.times_bought + b.times_paid - (a.times_bought + a.times_paid);
+      })
+      .slice(0, SUGGESTION_LIMIT);
+  }, [suggestions, items]);
+
   if (isLoading) return <LoadingState label="Einkaufsliste wird geladen…" />;
   if (error) return <ErrorState error={error} />;
-
-  const open = (items ?? []).filter((t) => !t.is_done);
-  const bought = (items ?? []).filter((t) => t.is_done);
 
   async function submit() {
     const trimmed = title.trim();
@@ -130,11 +218,14 @@ export default function ShoppingListScreen() {
         title="Einkaufsliste"
         subtitle={open.length === 0 ? 'Nichts zu holen' : `${open.length} auf der Liste`}
         right={
-          bought.length > 0 ? (
-            <Pressable onPress={() => void clearBought.mutateAsync()} hitSlop={8}>
-              <Text style={styles.clear}>Gekauftes löschen</Text>
-            </Pressable>
-          ) : undefined
+          <Pressable
+            onPress={() => router.push('/einkauf/historie')}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Einkaufshistorie"
+          >
+            <Ionicons name="time-outline" size={20} color={colors.text} />
+          </Pressable>
         }
       />
 
@@ -159,6 +250,49 @@ export default function ShoppingListScreen() {
           </View>
         ) : null}
       </View>
+
+      {quickAdd.length > 0 && !editingId ? (
+        <>
+          <Text style={styles.suggestionsLabel}>Oft gekauft</Text>
+          {/* Horizontal, so a long memory costs one row of screen instead of
+              pushing the actual list below the fold. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.suggestionsScroll}
+            contentContainerStyle={styles.suggestions}
+            keyboardShouldPersistTaps="handled"
+          >
+            {quickAdd.map((item) => (
+              <Pressable
+                key={item.item_key}
+                onPress={() => {
+                  void Haptics.selectionAsync();
+                  void addItem.mutateAsync({ title: item.name });
+                }}
+                style={[styles.suggestion, item.is_due && styles.suggestionDue]}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.name} auf die Liste setzen`}
+              >
+                <Ionicons
+                  name={item.is_due ? 'refresh' : 'add'}
+                  size={13}
+                  color={item.is_due ? colors.dueToday : colors.textFaint}
+                />
+                <Text style={styles.suggestionLabel}>{item.name}</Text>
+                {/* Only "seit N Tagen", never a price: the chip is a button for
+                    putting something on the list, and what it cost last time
+                    changes nothing about whether you need it now. */}
+                {item.is_due && item.days_since_bought !== null ? (
+                  <Text style={[styles.suggestionMeta, styles.suggestionMetaDue]}>
+                    seit {item.days_since_bought} T.
+                  </Text>
+                ) : null}
+              </Pressable>
+            ))}
+          </ScrollView>
+        </>
+      ) : null}
 
       <FlatList
         data={[...open, ...bought]}
@@ -210,13 +344,59 @@ export default function ShoppingListScreen() {
                 <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
                   {item.title}
                 </Text>
+                {/* The author moved down here from an avatar on the right: the
+                    stepper needs that width more than a coloured circle did,
+                    and "von Nico" says the same thing without decoding. */}
                 {fromInventory ? (
                   <View style={styles.metaRow}>
                     <Ionicons name="cube-outline" size={12} color={colors.textFaint} />
                     <Text style={styles.rowMeta}>Bestand niedrig</Text>
                   </View>
+                ) : author ? (
+                  <Text style={styles.rowMeta}>von {author.display_name}</Text>
                 ) : null}
               </Pressable>
+
+              {/* Only while it is still to be bought — once it is in the
+                  trolley the number is history, and a stepper on a ticked row
+                  invites changing what you already carried home. */}
+              {!item.is_done ? (
+                <View style={styles.stepper}>
+                  <Pressable
+                    onPress={() =>
+                      void setQuantity.mutateAsync({
+                        id: item.id,
+                        quantity: Math.max(1, item.quantity - 1),
+                      })
+                    }
+                    disabled={item.quantity <= 1}
+                    hitSlop={4}
+                    style={styles.stepperButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Eins weniger"
+                  >
+                    <Ionicons
+                      name="remove"
+                      size={16}
+                      color={item.quantity <= 1 ? colors.border : colors.text}
+                    />
+                  </Pressable>
+
+                  <Text style={styles.stepperValue}>{formatQuantity(item.quantity)}</Text>
+
+                  <Pressable
+                    onPress={() =>
+                      void setQuantity.mutateAsync({ id: item.id, quantity: item.quantity + 1 })
+                    }
+                    hitSlop={4}
+                    style={styles.stepperButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Eins mehr"
+                  >
+                    <Ionicons name="add" size={16} color={colors.text} />
+                  </Pressable>
+                </View>
+              ) : null}
 
               {fromInventory && item.product_id ? (
                 <Pressable
@@ -227,13 +407,6 @@ export default function ShoppingListScreen() {
                 >
                   <Ionicons name="open-outline" size={18} color={colors.textFaint} />
                 </Pressable>
-              ) : author ? (
-                <Avatar
-                  name={author.display_name}
-                  color={author.color}
-                  size={24}
-                  accessibilityLabel={`aufgeschrieben von ${author.display_name}`}
-                />
               ) : null}
 
               <Pressable
@@ -247,6 +420,26 @@ export default function ShoppingListScreen() {
           );
         }}
       />
+
+      {/* Abgehakt heißt gekauft, und gekauft ist der Moment, in dem drei
+          Sachen gleichzeitig stimmen sollen: die Liste ist leer, das Geld ist
+          gebucht, und der Bestand weiß Bescheid. Deshalb ist Abschließen die
+          Hauptaktion und "nur wegnehmen" die kleine daneben. */}
+      {bought.length > 0 ? (
+        <View style={styles.footer}>
+          <Button
+            label={`Einkauf abschließen · ${bought.length}`}
+            onPress={() => router.push('/einkauf/abschluss')}
+          />
+          <Pressable
+            onPress={() => void clearBought.mutateAsync()}
+            hitSlop={8}
+            accessibilityRole="button"
+          >
+            <Text style={styles.clear}>Nur von der Liste nehmen</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </Screen>
   );
 }

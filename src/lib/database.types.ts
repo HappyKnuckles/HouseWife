@@ -204,6 +204,12 @@ export type TodoRow = {
   product_id: string | null;
   source: TodoSource;
   list: TodoList;
+  /** How many to buy. Only meaningful on the Einkaufsliste; to-dos stay at 1. */
+  quantity: number;
+  /** NULL = still on the list. Set when the list is cleared; never deleted. */
+  cleared_at: string | null;
+  /** The expense this shopping row was billed into, if the shop was booked. */
+  expense_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -550,6 +556,33 @@ export type ItemPurchaseFrequencyRow = {
   last_purchased_at: string;
 }
 
+/**
+ * v_shopping_suggestions: what this household buys, how often, and what it
+ * costs. Union of ticked-off Einkaufsliste rows and itemised receipt lines —
+ * either half alone would know the rhythm without the price, or the price
+ * without the rhythm.
+ */
+export type ShoppingSuggestionRow = {
+  household_id: string;
+  /** The normalised name both halves are grouped on. */
+  item_key: string;
+  /** The most recently used spelling. */
+  name: string;
+  /** Set when the item has ever been on the list as a tracked product. */
+  product_id: string | null;
+  times_bought: number;
+  last_bought_at: string | null;
+  /** Mean days between purchases. NULL until there are at least two. */
+  avg_interval_days: number | null;
+  days_since_bought: number | null;
+  /** Bought at least three times, and the usual interval has elapsed. */
+  is_due: boolean | null;
+  last_price_cents: number | null;
+  avg_price_cents: number | null;
+  last_paid_at: string | null;
+  times_paid: number;
+}
+
 export type InventoryTotalRow = {
   household_id: string;
   product_id: string;
@@ -602,7 +635,11 @@ export type Database = {
         RecurringExpenseRow,
         Stamps | 'currency' | 'recurrence_unit' | 'recurrence_interval' | 'next_due_on' | 'is_active'
       >;
-      todos: Table<TodoRow, Stamps | 'is_done' | 'position' | 'source' | 'list' | 'product_id'>;
+      todos: Table<
+        TodoRow,
+        Stamps | 'is_done' | 'position' | 'source' | 'list' | 'quantity' | 'product_id'
+      >;
+      // cleared_at / expense_id are nullable, so Insertable already makes them optional.
       house_rules: Table<HouseRuleRow, Stamps | 'position'>;
       dog_commands: Table<DogCommandRow, Stamps>;
       events: Table<EventRow, Stamps | 'kind' | 'repeat_yearly' | 'remind_days_before'>;
@@ -650,6 +687,7 @@ export type Database = {
       v_cleaning_stats: View<CleaningStatsRow>;
       v_location_paths: View<LocationPathRow>;
       v_inventory_totals: View<InventoryTotalRow>;
+      v_shopping_suggestions: View<ShoppingSuggestionRow>;
       v_expense_category_month: View<ExpenseCategoryMonthRow>;
       v_item_purchase_frequency: View<ItemPurchaseFrequencyRow>;
     };
@@ -728,6 +766,16 @@ export type Database = {
       inventory_set_quantity: {
         /** `p_opened` null leaves opened_at alone; fractions are the point. */
         Args: { p_item_id: string; p_quantity: number; p_opened?: boolean | null; p_note?: string | null };
+        Returns: InventoryItemRow;
+      };
+      inventory_add_stock: {
+        /** Exact by product id. Falls back to the product's default location. */
+        Args: {
+          p_product_id: string;
+          p_quantity?: number;
+          p_location_id?: string | null;
+          p_note?: string | null;
+        };
         Returns: InventoryItemRow;
       };
       update_location: {

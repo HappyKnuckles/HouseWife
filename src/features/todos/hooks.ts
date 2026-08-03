@@ -79,6 +79,36 @@ export function useUpdateTodo() {
   });
 }
 
+/**
+ * Optimistic, because it is a stepper: waiting a round trip per tap makes
+ * "three of those" feel like fighting the app rather than counting.
+ */
+export function useSetQuantity(list: TodoList) {
+  const householdId = useHouseholdId();
+  const queryClient = useQueryClient();
+  const queryKey = keyFor(householdId, list);
+
+  return useMutation({
+    mutationFn: ({ id, quantity }: { id: string; quantity: number }) =>
+      api.updateTodo(id, { quantity }),
+
+    async onMutate({ id, quantity }) {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<TodoRow[]>(queryKey);
+      queryClient.setQueryData<TodoRow[]>(queryKey, (rows) =>
+        (rows ?? []).map((row) => (row.id === id ? { ...row, quantity } : row)),
+      );
+      return { previous };
+    },
+
+    onError(_err, _vars, context) {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+    },
+
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+}
+
 export function useDeleteTodo(list: TodoList) {
   const householdId = useHouseholdId();
   const queryClient = useQueryClient();
@@ -108,6 +138,39 @@ export function useClearCompleted(list: TodoList) {
 
   return useMutation({
     mutationFn: () => api.clearCompleted(householdId, list),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+}
+
+/**
+ * What this household buys, for the one-tap re-add row.
+ *
+ * Its own key rather than a slice of ['todos', …]: it is derived from ticked
+ * *and* cleared rows plus every itemised receipt, so it does not change when
+ * the visible list does — only when something is actually bought.
+ */
+export function useShoppingSuggestions() {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['todos', 'suggestions', householdId],
+    queryFn: () => api.fetchShoppingSuggestions(householdId),
+  });
+}
+
+export function useShoppingHistory() {
+  const householdId = useHouseholdId();
+  return useQuery({
+    queryKey: ['todos', 'history', householdId],
+    queryFn: () => api.fetchShoppingHistory(householdId),
+  });
+}
+
+/** Closes a finished shop, optionally stamping the expense it produced. */
+export function useCloseShoppingRows() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { ids: string[]; expenseId?: string | null }) =>
+      api.closeShoppingRows(input),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
   });
 }

@@ -166,6 +166,14 @@ export function useAdjustQuantity() {
   });
 }
 
+export function useAddStock() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Parameters<typeof api.addStock>[0]) => api.addStock(input),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
 export function useSetQuantity() {
   const queryClient = useQueryClient();
   return useMutation({

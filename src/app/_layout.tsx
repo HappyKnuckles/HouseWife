@@ -119,6 +119,11 @@ function RootNavigator() {
         <Stack.Screen name="inventar/orte" options={{ title: 'Orte' }} />
         <Stack.Screen name="inventar/orte/[id]" options={{ title: 'Ort' }} />
         <Stack.Screen name="inventar/produkt/[id]" options={{ title: 'Produkt' }} />
+        <Stack.Screen
+          name="einkauf/abschluss"
+          options={{ title: 'Einkauf abschließen', presentation: 'modal' }}
+        />
+        <Stack.Screen name="einkauf/historie" options={{ title: 'Einkaufshistorie' }} />
         <Stack.Screen name="termine/neu" options={{ title: 'Neuer Termin', presentation: 'modal' }} />
         <Stack.Screen name="termine/[id]" options={{ title: 'Termin' }} />
       </Stack.Protected>

@@ -27,7 +27,7 @@ no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        27 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        30 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
     household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
@@ -149,10 +149,31 @@ npx supabase secrets set BARCODE_PROVIDERS=openfoodfacts   # food only
 npx supabase secrets set BARCODE_PROVIDERS=null             # no lookups at all
 ```
 
-OCR has no real provider by default:
+**Receipt OCR** ships with two providers: `noop` (the default — attaches the
+photo, reads nothing) and `google-vision`. To turn the real one on, in the same
+Google Cloud project Firebase created for you:
+
+1. **APIs & Services → Library → Cloud Vision API → Enable.** The free tier is
+   1,000 units/month, which is far more receipts than a household photographs.
+2. **Credentials → Create credentials → API key.** Then restrict it, because an
+   unrestricted key is the one thing here worth being careful about:
+   *API restrictions → Restrict key → Cloud Vision API*. Leave **Application
+   restrictions** as *None* — the call comes from a Supabase Edge Function, not
+   from an app or a fixed IP.
+3. Hand it to Supabase:
 
 ```bash
-npx supabase secrets set OCR_PROVIDER=noop                 # no real OCR provider ships
+npx supabase secrets set OCR_PROVIDER=google-vision
+npx supabase secrets set GOOGLE_VISION_API_KEY=AIza…
+```
+
+Note this is a *different* key from the one in `google-services.json`: that one
+is restricted to your Android app and would be rejected here. Vision only reads
+the paper — turning its text into line items is `parse-receipt.ts`, which is
+where the accuracy actually lives and is tested on its own (`npm run test:receipt`).
+
+```bash
+npx supabase secrets set OCR_PROVIDER=noop                 # back to attach-only
 ```
 
 ### 6. Schedule the reminder / keep-alive job
@@ -374,7 +395,7 @@ split rules, RLS enforcement, recurrence and rotation, and the inventory scan fl
 
 ```bash
 npm run test:db
-# 128 passed, 0 failed
+# 146 passed, 0 failed
 ```
 
 **The cron:** the app shows it under **Mehr → Server-Status**. Or query it directly:
@@ -613,6 +634,65 @@ stock, so a plain `default auth.uid()` would put that person's face on a row the
 never touched. Those rows are marked *Bestand niedrig* and link to the product
 instead.
 
+### The shopping loop closes
+
+Low stock → Einkaufsliste → shop → expense *and* back into the inventory. Every
+edge of that used to be a manual re-entry of something the app already knew.
+
+**Nothing on the list is deleted any more.** "Gekauftes löschen" was a DELETE, so
+the one thing only the shopping list knows — what this household actually buys,
+and how often — was thrown away every week, along with the `done_at`/`done_by`
+that had just been stamped. It sets `cleared_at` instead: the row leaves the
+screen and stays in the table. Deleting a *single* row by hand is still a hard
+delete, because that means "I never wanted this", which is not a purchase and
+must not end up in the history.
+
+**`v_shopping_suggestions` is a FULL OUTER JOIN of two half-memories.** The list
+knows you buy Käse every ten days but not that it costs 3,49 €; the receipts know
+the price but only for the shops someone bothered to itemise. Joined on the same
+normalised name `v_item_purchase_frequency` already groups by — which works
+because since 0027 a generated row is titled with the bare product name, so
+`Mehl` typed by hand and `Mehl` written by the generator land on one key by
+construction. `product_id` comes along when there is one, and that is what lets
+a suggestion be booked back into the inventory later.
+
+From that: one-tap chips above the composer (most of a weekly shop is the same
+twenty items), *"zuletzt vor 12 Tagen"*, and a due flag. Due needs **three**
+purchases, not two — two points make a line through anything.
+
+**Einkauf abschließen is two steps, and money is only in the second one.**
+
+*Einräumen* takes the ticked rows and puts them in the inventory. The count
+starts at what the list asked for and has **no ceiling** — you went for two
+packs of butter and they were on offer, so four came home, and a cap at the
+planned amount would make the inventory wrong every time the shop surprises you.
+
+Each row can also be **split across locations**: six bottles, two in the fridge
+and four in the Keller, is one shop and two lots. The number in the row header
+is always the *sum* of its allocations rather than a separate figure they have
+to agree with — splitting takes one off the fullest shelf instead of inventing
+stock, so there is no way to leave the screen in a state where the total and the
+shelves disagree, and no validation error to explain. Each allocation books its
+own call, so the two lots land at their two locations exactly as a scan would
+have put them there. Rows that came from a restock reminder go through
+`inventory_add_stock()` (exact — the row knows its `product_id`); hand-written
+ones go through `inventory_scan_in()`, which matches on the normalised name and
+only creates a catalog entry when nothing matched, so "Käse" doesn't become a
+new product every time you buy cheese. Stock recovering is what deletes the
+Einkaufsliste row, so the loop closes itself — nobody ticks anything twice.
+
+Then it hands over to **/ausgaben/neu**, prefilled with a title and category.
+That screen already knows how to split a total, pick a payer and photograph a
+receipt; a second, poorer copy of that form inside the checkout would have been
+one more thing to keep in step with `apply_expense_split()`.
+
+`todos.quantity` is `numeric`, not an integer — the inventory has dealt in
+halves since 0025, and "0,5 kg Hack" is a normal thing to write on a list. On
+the to-do list the column is inert and the screen never shows it.
+
+`todos.expense_id` is `ON DELETE SET NULL`: deleting an expense must cost you the
+link, never the purchase history.
+
 ### Termine, Jahrestage and Geburtstage are one table
 
 "Wann kommt Marie vorbei?" and "seit wann sind wir zusammen?" are the same
@@ -802,6 +882,7 @@ that need to feel instant (ticking a chore, checking a to-do) are optimistic loc
 | `npm run seed:users` | Create the active profile's two accounts + their household |
 | `npm run android` / `ios` | Launch on a device/emulator |
 | `npm run test:db` | Apply all migrations to a real Postgres and test the logic |
+| `npm run test:receipt` | Parse fixture receipts — the OCR text-to-line-items logic |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run gen:types` | Regenerate `src/lib/database.types.ts` from your linked project |
 

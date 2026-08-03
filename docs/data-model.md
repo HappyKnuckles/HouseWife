@@ -223,6 +223,16 @@ Deliberately boring. Realtime + optimistic checkbox, hard delete (with an undo s
 
 `created_by` is stamped by a trigger from `auth.uid()` (migration 0027), not sent by the client — same reasoning as `done_by`. The Einkaufsliste shows it as the row's author and has no assignee at all; the to-do list keeps `assignee_id`, where "wer macht das" is the actual question.
 
+### Shopping history — `cleared_at`, `expense_id`, `v_shopping_suggestions`
+Clearing the list is an UPDATE of `cleared_at`, not a DELETE (migration 0028). Every list query carries `cleared_at is null`; the partial index `todos_household_list_idx` is defined on the same predicate. Bought-ness stays `is_done`/`done_at` — `cleared_at` is only visibility, so a row can be bought and still on screen. Deleting one row by hand remains a hard delete: "I never wanted this" is not a purchase.
+
+`expense_id` (composite FK, `ON DELETE SET NULL`) links a finished shop to the expense it produced.
+
+`v_shopping_suggestions` FULL OUTER JOINs the ticked rows against `expense_items`, keyed on `lower(btrim(name))` — the same normalisation `v_item_purchase_frequency` uses. It exposes `times_bought`, `last_bought_at`, `avg_interval_days`, `days_since_bought`, `is_due` (≥ 3 purchases and the interval elapsed), plus `last_price_cents` / `avg_price_cents` from the receipt side. One source alone would know the rhythm without the price, or the price without the rhythm.
+
+### `inventory_add_stock(p_product_id, p_quantity, p_location_id, p_note)`
+The way back from the Einkaufsliste into the inventory (migration 0029). Adds to the (product, location, no expiry) lot or creates it, defaulting to `products.default_location_id`, and logs a `scan_in` movement. Deliberately *not* `inventory_scan_in()`: that resolves a product by barcode or name, and a shopping row already knows its `product_id` — going back through the name could top up the wrong catalog entry when two products share one. Booking the stock is what pushes the total back above `restock_min_quantity`, which is what deletes the Einkaufsliste row, so the loop closes without anyone ticking twice.
+
 > **`list` is one column instead of a second table** (migration 0024). A shopping item is a to-do in every way that matters — title, checkbox, assignee, position, hard delete, identical RLS, same realtime subscription — and this table already carried the two columns only a shopping item uses (`product_id`, `source`, added for the restock generator in 0020). A `shopping_items` table would have been a copy of this one plus a rewritten `sync_restock_todos()`, i.e. two of everything to keep in step. Each screen queries its own list; `todos_household_list_idx` puts `list` directly behind `household_id`, and a CHECK pins generated `'restock'` rows to `list = 'shopping'` so one cannot end up on a screen that does not show it.
 
 ---
