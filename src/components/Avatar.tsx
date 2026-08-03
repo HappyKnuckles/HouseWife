@@ -13,10 +13,17 @@ export function Avatar({
   name,
   color,
   size = 32,
+  accessibilityLabel,
 }: {
   name: string | null | undefined;
   color?: string | null;
   size?: number;
+  /**
+   * What the colour means here. Two initials in a coloured circle is a rebus,
+   * not a label — where the avatar is the *only* thing carrying a fact (who
+   * wrote this line), a screen reader needs the fact spelled out.
+   */
+  accessibilityLabel?: string;
 }) {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(() => ({
@@ -31,6 +38,8 @@ export function Avatar({
 
   return (
     <View
+      accessible={!!accessibilityLabel}
+      accessibilityLabel={accessibilityLabel}
       style={[
         styles.avatar,
         { width: size, height: size, borderRadius: radius.pill, backgroundColor: background },

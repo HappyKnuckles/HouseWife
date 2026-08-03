@@ -566,18 +566,30 @@ the cupboard, "0.5 piece" reads like a database.
 
 The push is a nudge that is gone once dismissed; what you need at the shop is a
 list. Any product with a `restock_min_quantity` — the switch on the product
-screen — gets an open `X kaufen` entry while it is at or below that threshold,
-and loses it again when stock recovers. No second opt-in: having asked to be
-reminded *is* the opt-in.
+screen — gets an open entry while it is at or below that threshold, and loses it
+again when stock recovers. No second opt-in: having asked to be reminded *is*
+the opt-in.
+
+The entry is titled with the product name and nothing else. It used to read
+`Mehl kaufen`, which was right while these rows landed on the to-do list — there
+the verb was the point. On a list called Einkaufsliste every line already means
+kaufen, so the word was noise on every row and the first thing to be cut off a
+long name.
 
 Those entries live in `todos` under `list = 'shopping'`, which is the whole of
 what separates the Einkaufsliste from the to-do list. A shopping item is a to-do
-in every way that matters — title, checkbox, assignee, position, hard delete,
-same RLS, same realtime channel — and `todos` already carried the two columns
-only a shopping item uses (`product_id`, `source`). A second table would have
-been a copy of this one plus a second `sync_restock_todos()` to keep in step. A
-CHECK pins generated rows to the shopping list so one cannot be dragged onto the
+in every way that matters — title, checkbox, position, hard delete, same RLS,
+same realtime channel — and `todos` already carried the two columns only a
+shopping item uses (`product_id`, `source`). A second table would have been a
+copy of this one plus a second `sync_restock_todos()` to keep in step. A CHECK
+pins generated rows to the shopping list so one cannot be dragged onto the
 to-dos and vanish from the screen that owns it.
+
+The one thing the Einkaufsliste deliberately drops is the assignee. Whoever is
+at the shop buys the whole list; "Milch — für Nico" would be a rule about who is
+allowed to pick up the milk, which nobody means. The face on a row is the
+*author* instead, which answers the question a shared list actually raises:
+what did you mean by "Käse".
 
 `todos.source` separates the two kinds of row. A `'restock'` row is the
 generator's to manage; a `'manual'` one you wrote yourself is never touched,
@@ -593,9 +605,13 @@ scan the flour back in, look at the list, and it still says buy flour. The cron
 still calls the same function afterwards as a safety net for anything that
 changed by another route.
 
-`created_by` stays NULL on a generated row — nobody wrote it, and putting one of
-the two members' faces on it would be a small lie. The Einkaufsliste marks them
-as *Bestand niedrig* and links through to the product instead.
+`created_by` is stamped by a trigger rather than sent by the client, the same way
+`done_by` is — the phone that wrote the row should not get to say who wrote it.
+On a generated row it is forced back to NULL: nobody wrote it, and the trigger
+that runs the generator fires inside the transaction of whoever *used up* the
+stock, so a plain `default auth.uid()` would put that person's face on a row they
+never touched. Those rows are marked *Bestand niedrig* and link to the product
+instead.
 
 ### Termine, Jahrestage and Geburtstage are one table
 

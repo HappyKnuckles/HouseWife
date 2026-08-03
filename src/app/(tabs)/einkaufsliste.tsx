@@ -7,10 +7,9 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
-import { Chip } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
-import { useMemberMap, useMembers } from '../../features/household/hooks';
+import { useMemberMap } from '../../features/household/hooks';
 import {
   useAddTodo,
   useClearCompleted,
@@ -33,13 +32,18 @@ import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
  * threshold appears here within the same second the stock changes, so the list
  * is already right by the time you are standing in the shop — and those rows
  * carry a link back to the product, which a hand-written line cannot.
+ *
+ * No assignee, unlike the to-do list. Whoever is at the shop buys the whole
+ * list; "Milch — für Nico" would be a rule about who may pick up the milk,
+ * which is not a thing anyone means. The face on a row is the *author*
+ * instead — the answer to "was heißt hier Käse", which is the question a
+ * shared list actually raises.
  */
 export default function ShoppingListScreen() {
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
     clear: { ...typography.caption, color: c.primary },
     composer: { paddingHorizontal: spacing.lg, gap: spacing.sm, paddingBottom: spacing.md },
-    chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
     list: { paddingBottom: spacing.xxl * 2 },
     row: {
       flexDirection: 'row' as const,
@@ -75,7 +79,6 @@ export default function ShoppingListScreen() {
   }));
 
   const { data: items, isLoading, isRefetching, refetch, error } = useTodos('shopping');
-  const { data: members } = useMembers();
   const memberMap = useMemberMap();
 
   const router = useRouter();
@@ -86,7 +89,6 @@ export default function ShoppingListScreen() {
   const clearBought = useClearCompleted('shopping');
 
   const [title, setTitle] = useState('');
-  const [assignee, setAssignee] = useState<string | null>(null);
   /** Which entry the composer is currently editing; null = writing a new one. */
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -103,26 +105,23 @@ export default function ShoppingListScreen() {
     const id = editingId;
     setTitle('');
     setEditingId(null);
-    setAssignee(null);
 
     try {
-      if (id) await updateItem.mutateAsync({ id, patch: { title: trimmed, assignee_id: assignee } });
-      else await addItem.mutateAsync({ title: trimmed, assigneeId: assignee });
+      if (id) await updateItem.mutateAsync({ id, patch: { title: trimmed } });
+      else await addItem.mutateAsync({ title: trimmed });
     } catch (err) {
       Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 
-  function startEditing(item: { id: string; title: string; assignee_id: string | null }) {
+  function startEditing(item: { id: string; title: string }) {
     setEditingId(item.id);
     setTitle(item.title);
-    setAssignee(item.assignee_id);
   }
 
   function cancelEditing() {
     setEditingId(null);
     setTitle('');
-    setAssignee(null);
   }
 
   return (
@@ -147,18 +146,6 @@ export default function ShoppingListScreen() {
           returnKeyType="done"
           onSubmitEditing={() => void submit()}
         />
-        <View style={styles.chipRow}>
-          <Chip label="Egal wer" active={!assignee} onPress={() => setAssignee(null)} />
-          {(members ?? []).map((member) => (
-            <Chip
-              key={member.id}
-              label={member.display_name}
-              color={member.color}
-              active={assignee === member.id}
-              onPress={() => setAssignee(member.id)}
-            />
-          ))}
-        </View>
         {editingId ? (
           <View style={styles.composerActions}>
             <Button label="Abbrechen" variant="secondary" onPress={cancelEditing} style={styles.flex} />
@@ -187,8 +174,10 @@ export default function ShoppingListScreen() {
           />
         }
         renderItem={({ item }) => {
-          const person = item.assignee_id ? memberMap[item.assignee_id] : null;
-          // Written by sync_restock_todos(), not by either of you.
+          // NULL for a generated row: nobody wrote it, and the trigger in
+          // migration 0027 keeps it that way rather than crediting whoever
+          // happened to use up the last of the stock.
+          const author = item.created_by ? memberMap[item.created_by] : null;
           const fromInventory = item.source === 'restock';
 
           return (
@@ -224,12 +213,8 @@ export default function ShoppingListScreen() {
                 {fromInventory ? (
                   <View style={styles.metaRow}>
                     <Ionicons name="cube-outline" size={12} color={colors.textFaint} />
-                    <Text style={styles.rowMeta}>
-                      Bestand niedrig{person ? ` · für ${person.display_name}` : ''}
-                    </Text>
+                    <Text style={styles.rowMeta}>Bestand niedrig</Text>
                   </View>
-                ) : person ? (
-                  <Text style={styles.rowMeta}>für {person.display_name}</Text>
                 ) : null}
               </Pressable>
 
@@ -242,8 +227,13 @@ export default function ShoppingListScreen() {
                 >
                   <Ionicons name="open-outline" size={18} color={colors.textFaint} />
                 </Pressable>
-              ) : person ? (
-                <Avatar name={person.display_name} color={person.color} size={24} />
+              ) : author ? (
+                <Avatar
+                  name={author.display_name}
+                  color={author.color}
+                  size={24}
+                  accessibilityLabel={`aufgeschrieben von ${author.display_name}`}
+                />
               ) : null}
 
               <Pressable

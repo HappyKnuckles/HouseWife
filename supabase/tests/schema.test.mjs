@@ -401,11 +401,16 @@ ok('a member cannot run the generator by hand', err !== null, 'execute was not r
 // The staples section left "Mehl" (no barcode) at 0 with a threshold of 1, and
 // the trigger from 0021 already wrote the to-do at that moment — no cron run
 // needed, which is the whole point.
-r = await as(USER_A, `select title, source, product_id from public.todos
+r = await as(USER_A, `select title, source, product_id, created_by from public.todos
                     where source='restock' and household_id='${HH}'`);
 ok('a low staple writes itself onto the list',
-   r.rows.length === 1 && r.rows[0].title === 'Mehl kaufen' && r.rows[0].product_id !== null,
+   r.rows.length === 1 && r.rows[0].title === 'Mehl' && r.rows[0].product_id !== null,
    JSON.stringify(r.rows));
+// The list is the verb: "Mehl kaufen" on the Einkaufsliste says it twice.
+ok('...titled with just the product name', r.rows[0].title === 'Mehl', r.rows[0].title);
+// Nobody wrote it, and the trigger that runs the generator fires inside the
+// transaction of whoever used the stock up — so this must not be them.
+ok('...and credited to nobody', r.rows[0].created_by === null, JSON.stringify(r.rows[0]));
 
 ok('the hourly reconcile then finds nothing left to do', (await runRestock()) === 0);
 
@@ -449,11 +454,15 @@ r = await as(USER_A, `select count(*)::int n from public.todos where source='res
 ok('the hourly reconcile agrees with the triggers', r.rows[0].n === 0, `got ${r.rows[0].n}`);
 
 // A hand-written to-do for the same thing is none of the generator's business.
-await as(USER_A, `insert into public.todos (household_id, title, created_by)
-                  values ('${HH}', 'Mehl kaufen', '${USER_A}')`);
+await as(USER_A, `insert into public.todos (household_id, title) values ('${HH}', 'Mehl')`);
 await runRestock();
-r = await as(USER_A, `select count(*)::int n from public.todos where title='Mehl kaufen' and source='manual'`);
+r = await as(USER_A, `select count(*)::int n from public.todos where title='Mehl' and source='manual'`);
 ok('a manual to-do with the same title is left alone', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// created_by is stamped from auth.uid() rather than sent by the client, the
+// same way done_by is — so "wer hat das aufgeschrieben" cannot be faked.
+r = await as(USER_A, `select created_by from public.todos where title='Mehl' and source='manual'`);
+ok('a hand-written row is credited to its author', r.rows[0].created_by === USER_A, JSON.stringify(r.rows[0]));
 
 // A ticked-off restock to-do is history and must not block the next one.
 await db.exec(`set role postgres;

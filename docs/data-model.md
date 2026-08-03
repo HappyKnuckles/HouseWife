@@ -221,6 +221,8 @@ Only `status='open'` expenses count. Nets always sum to zero. The UI reads one r
 
 Deliberately boring. Realtime + optimistic checkbox, hard delete (with an undo snackbar client-side rather than a `deleted_at` column).
 
+`created_by` is stamped by a trigger from `auth.uid()` (migration 0027), not sent by the client — same reasoning as `done_by`. The Einkaufsliste shows it as the row's author and has no assignee at all; the to-do list keeps `assignee_id`, where "wer macht das" is the actual question.
+
 > **`list` is one column instead of a second table** (migration 0024). A shopping item is a to-do in every way that matters — title, checkbox, assignee, position, hard delete, identical RLS, same realtime subscription — and this table already carried the two columns only a shopping item uses (`product_id`, `source`, added for the restock generator in 0020). A `shopping_items` table would have been a copy of this one plus a rewritten `sync_restock_todos()`, i.e. two of everything to keep in step. Each screen queries its own list; `todos_household_list_idx` puts `list` directly behind `household_id`, and a CHECK pins generated `'restock'` rows to `list = 'shopping'` so one cannot end up on a screen that does not show it.
 
 ---
@@ -308,7 +310,7 @@ Cheap to write, and it's what makes concurrent edits from two phones debuggable 
 ### `todos.source` / `todos.product_id`
 `source text check (source in ('manual','restock'))`, `product_id uuid` with a composite FK to `(products.id, household_id)`.
 
-A `'restock'` row is written and removed by `sync_restock_todos()` — triggers on `inventory_items` and on `products.restock_min_quantity` run it for one product, the hourly cron runs it for all of them. It writes onto the Einkaufsliste (`list = 'shopping'`, see §6), which is the list you actually read at the shop. `unique (household_id, product_id) where source = 'restock' and not is_done` is what makes an hourly reconcile idempotent while still allowing a fresh entry after the last one was ticked off. A `'manual'` row is never touched by the generator, even with an identical title.
+A `'restock'` row is written and removed by `sync_restock_todos()` — triggers on `inventory_items` and on `products.restock_min_quantity` run it for one product, the hourly cron runs it for all of them. It writes onto the Einkaufsliste (`list = 'shopping'`, see §6), titled with the bare product name, and with `created_by` forced to NULL — a generated row has no author, and the trigger runs inside the transaction of whoever consumed the stock, so a `default auth.uid()` would credit the wrong person (migration 0027). `unique (household_id, product_id) where source = 'restock' and not is_done` is what makes an hourly reconcile idempotent while still allowing a fresh entry after the last one was ticked off. A `'manual'` row is never touched by the generator, even with an identical title.
 
 `delta` is per **lot**, not per product, which is what makes `reason='move'` readable: a lot that simply changes shelf logs one row with `delta 0` (nothing about that lot's quantity changed), while stock moving *between* two lots — a merge, or a partial move — logs a `-n`/`+n` pair. Either way the move rows sum to zero, so a move can never invent or lose stock.
 
