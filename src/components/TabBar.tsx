@@ -71,10 +71,6 @@ export function TabBar({ state, navigation, insets }: BottomTabBarProps) {
       paddingTop: spacing.sm,
     },
     slot: { flex: 1, alignItems: 'center' as const, gap: 2, paddingHorizontal: spacing.xs },
-    slotIcon: { alignItems: 'center' as const, justifyContent: 'center' as const },
-    // Sits on the icon rather than next to the label: it has to survive the
-    // slot showing a real screen's name, where there is no room for more text.
-    overflowMark: { position: 'absolute' as const, top: -5, right: -8 },
     slotLabel: { ...typography.micro, textTransform: 'none' as const },
     overlay: { flex: 1, justifyContent: 'flex-end' as const },
     dim: {
@@ -203,20 +199,11 @@ export function TabBar({ state, navigation, insets }: BottomTabBarProps) {
               activeOverflow ? `${activeOverflow.title} — weitere Bereiche öffnen` : 'Mehr'
             }
           >
-            <View style={styles.slotIcon}>
-              <Ionicons
-                name={activeOverflow?.icon ?? 'ellipsis-horizontal'}
-                size={24}
-                color={activeOverflow ? colors.primary : colors.textFaint}
-              />
-              <View style={styles.overflowMark}>
-                <Ionicons
-                  name="chevron-up"
-                  size={11}
-                  color={activeOverflow ? colors.primary : colors.textFaint}
-                />
-              </View>
-            </View>
+            <Ionicons
+              name={activeOverflow?.icon ?? 'ellipsis-horizontal'}
+              size={24}
+              color={activeOverflow ? colors.primary : colors.textFaint}
+            />
             <Text
               style={[
                 styles.slotLabel,
