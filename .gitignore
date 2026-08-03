@@ -18,6 +18,20 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Firebase. Neither of these is in the repo, for two different reasons.
+#
+# The service account key is a real credential — it is what lets Expo's push
+# service send through FCM. It lives in EAS (npx eas credentials -p android).
+#
+# google-services.json is NOT a secret (Google documents Firebase API keys as
+# safe to ship, and it is extractable from any APK), but this repo is public and
+# a fork has no business inheriting this project's Firebase identity. EAS gets it
+# as a file-type env var instead — see app.config.js.
+*-firebase-adminsdk-*.json
+google-service-account*.json
+google-services.json
+GoogleService-Info.plist
+
 # Metro
 .metro-health-check*
 

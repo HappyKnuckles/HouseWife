@@ -245,7 +245,57 @@ npx eas build --profile development --platform android
 
 Then **Mehr → Push auf diesem Gerät → Aktivieren** to register the device. The screen
 tells you exactly why registration failed if it does (Expo Go, simulator, missing
-project id, permission denied).
+project id, permission denied, or the error the OS itself returned).
+
+**Android additionally needs FCM credentials**, and this is the step that is easy to
+miss because nothing complains until you press Aktivieren.
+
+This is not a second backend. Waking an app that is not running is something only
+the platform's own push transport can do — FCM on Android, APNs on iOS — so the
+chain is `household-tick → Expo push service → FCM/APNs → phone`, and only that last
+hop is Google's or Apple's. Nothing else moves: no Firestore, no Firebase Auth, no
+analytics; the Firebase project exists solely to hand you a sender id and a service
+account key. APNs needs the same thing on iOS, but EAS provisions it during the build
+without asking, which is why only Android shows up as a chore here.
+
+So the *build* needs a `google-services.json` and EAS needs the matching
+service-account key:
+
+1. [Firebase console](https://console.firebase.google.com) → new project → add an
+   Android app with the package name from `app.json` (`dev.nicolashoffmann.housewife`).
+   It has to match exactly: `google-services.json` is keyed by package name, and the
+   Google Services Gradle plugin fails the build with *"No matching client found"* if
+   it does not.
+2. Download `google-services.json` into the project root. It is **not committed** — the
+   repo is public, and while the file is not a secret (Google documents Firebase API
+   keys as safe to ship, and anyone can unzip one out of an APK), there is no reason to
+   hand a fork this project's Firebase identity ready-wired. Give EAS its own copy
+   instead, once:
+
+   ```bash
+   npx eas env:set --name GOOGLE_SERVICES_JSON --type file \
+     --value ./google-services.json --visibility secret \
+     --environment development --environment preview --environment production
+   ```
+
+   During a build EAS writes that file out and sets the variable to its path;
+   `app.config.js` reads it and falls back to `./google-services.json` locally. That
+   file is the only reason the dynamic config exists — `app.json` still owns everything
+   else.
+3. Firebase → Project settings → Service accounts → **Generate new private key**.
+4. `npx eas credentials -p android` → **Google Service Account** → *Manage your Google
+   Service Account Key for Push Notifications (FCM V1)* → *Set up …* and give it the
+   path to that JSON. **Not** *Push Notifications (Legacy)*: that entry manages the FCM
+   server key Google retired in 2024, and anything set up there delivers nothing.
+   This key is a real secret — `.gitignore` refuses it, and EAS keeps the only copy.
+5. Rebuild. This is native config, so an OTA update cannot deliver it.
+
+The two halves do different jobs and both are required: `google-services.json` is how
+the *app* gets a token, the service account key is how *Expo* is allowed to send to it.
+
+Without those, `getExpoPushTokenAsync()` fails on the device with a Firebase error
+and no token is ever stored. iOS needs no equivalent step — APNs credentials are
+handled by EAS during the build.
 
 ### 8. Cloud builds need the env vars uploaded separately
 
@@ -766,6 +816,17 @@ calling `create_expense()`. That is the constraint doing its job; see
 development build, not Expo Go; `push_tokens` has a row for you with `disabled_at`
 null; the household's `reminder_hour` matches the local hour you are testing in, or
 use `?force=true`.
+
+**Push registration fails on Android** — almost always the missing FCM credentials in
+[step 7](#7-run-it): no `google-services.json` in the build, or no FCM V1 service
+account key uploaded to EAS. The Aktivieren button now shows the OS error verbatim
+and adds that hint when the message mentions Firebase.
+
+**"Nach Updates suchen" errors instead of finding nothing** — a build only carries an
+update channel if EAS made it, so a locally built `expo run:android` release APK has
+nothing to ask. Same error shape when the build's fingerprint matches no published
+update. Both mean "this binary cannot be updated over the air", not "the update
+failed": install a `--profile preview` build and publish to the same channel.
 
 **Receipt upload fails with a permission error** — the object path must start with the
 household id. See [step 3](#3-verify-the-storage-bucket).

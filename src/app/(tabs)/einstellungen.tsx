@@ -19,7 +19,7 @@ import {
 import { Alert } from '../../lib/alert';
 import { errorMessage } from '../../lib/errors';
 import { formatDateTime, relativeTime } from '../../lib/format';
-import { pushStatusMessage, registerPushToken, type PushRegistrationResult } from '../../lib/notifications';
+import { describePushResult, registerPushToken, type PushRegistrationResult } from '../../lib/notifications';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles, type ThemePreference } from '../../lib/theme-context';
 
@@ -94,7 +94,7 @@ export default function SettingsScreen() {
     setPush(result);
 
     if (result.status !== 'registered') {
-      Alert.alert('Push nicht aktiviert', pushStatusMessage[result.status]);
+      Alert.alert('Push nicht aktiviert', describePushResult(result));
     }
   }
 
@@ -127,7 +127,20 @@ export default function SettingsScreen() {
       // button below into "Jetzt neu starten".
       await Updates.fetchUpdateAsync();
     } catch (err) {
-      Alert.alert('Update fehlgeschlagen', errorMessage(err));
+      // The two failures that are not really failures: a build that was not
+      // made by EAS carries no channel, and a build whose fingerprint no longer
+      // matches any published update has nothing to be offered. Both come back
+      // as an error rather than `isAvailable: false`, and neither is fixable
+      // from this screen — so say which one it is instead of the raw string.
+      const message = errorMessage(err);
+      const noChannel = /channel|runtime ?version|no compatible|not found|404/i.test(message);
+
+      Alert.alert(
+        'Update fehlgeschlagen',
+        noChannel
+          ? `${message}\n\nDiese Installation ist keinem Update-Kanal zugeordnet oder ihre Runtime-Version passt zu keinem veröffentlichten Update. Das trifft auf lokal gebaute APKs zu — nur EAS-Builds (preview/production) bekommen OTA-Updates.`
+          : message,
+      );
     }
   }
 
@@ -183,7 +196,7 @@ export default function SettingsScreen() {
             <View style={styles.switchText}>
               <Text style={styles.rowTitle}>Push auf diesem Gerät</Text>
               <Text style={styles.rowHint}>
-                {push ? pushStatusMessage[push.status] : 'Noch nicht registriert.'}
+                {push ? describePushResult(push) : 'Noch nicht registriert.'}
               </Text>
             </View>
             <Button label="Aktivieren" variant="secondary" onPress={() => void enablePush()} />

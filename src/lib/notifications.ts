@@ -111,6 +111,26 @@ export const pushStatusMessage: Record<PushRegistrationResult['status'], string>
   error: 'Registrierung fehlgeschlagen.',
 };
 
+/**
+ * The line the settings screen shows.
+ *
+ * The `error` case has to carry its own message: the five other statuses are
+ * self-explanatory, but "Registrierung fehlgeschlagen." on its own is the
+ * least useful sentence in the app — it hides the one string that says whether
+ * this is missing FCM credentials, a network failure or a rejected token.
+ */
+export function describePushResult(result: PushRegistrationResult): string {
+  if (result.status !== 'error') return pushStatusMessage[result.status];
+
+  // Android needs FCM credentials in the *build*; a project without them fails
+  // here and nowhere else, with a message nobody would connect to Firebase.
+  const firebase = /firebase|FIS_AUTH|SERVICE_NOT_AVAILABLE|MISSING_INSTANCEID/i.test(result.message);
+
+  return firebase
+    ? `${result.message}\n\nAndroid braucht dafür FCM-Zugangsdaten im Build: google-services.json im Projekt und der Service-Account-Key bei EAS (npx eas credentials). Danach neu bauen.`
+    : `${pushStatusMessage.error} ${result.message}`;
+}
+
 /** Stops reminders for this device without touching the other one. */
 export async function disablePushToken(token: string): Promise<void> {
   await supabase
