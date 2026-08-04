@@ -72,7 +72,10 @@ export async function setTodoDone(todoId: string, isDone: boolean): Promise<Todo
 export async function updateTodo(
   todoId: string,
   patch: Partial<
-    Pick<TodoRow, 'title' | 'notes' | 'assignee_id' | 'due_date' | 'position' | 'quantity'>
+    Pick<
+      TodoRow,
+      'title' | 'notes' | 'assignee_id' | 'due_date' | 'position' | 'quantity' | 'product_id'
+    >
   >,
 ): Promise<TodoRow> {
   const { data, error } = await supabase.from('todos').update(patch).eq('id', todoId).select().single();
@@ -123,7 +126,13 @@ export async function fetchShoppingSuggestions(
   return data ?? [];
 }
 
-/** Past purchases, newest first — one row per thing bought. */
+/**
+ * Past purchases, newest first — one row per thing bought.
+ *
+ * Only closed rows. A ticked row that has not been through "Einkauf
+ * abschließen" is still shopping in progress and belongs on the list, not in
+ * the history; `cleared_at` is exactly the line between the two.
+ */
 export async function fetchShoppingHistory(householdId: string, limit = 200): Promise<TodoRow[]> {
   const { data, error } = await supabase
     .from('todos')
@@ -132,6 +141,7 @@ export async function fetchShoppingHistory(householdId: string, limit = 200): Pr
     .eq('list', 'shopping')
     .eq('is_done', true)
     .not('done_at', 'is', null)
+    .not('cleared_at', 'is', null)
     .order('done_at', { ascending: false })
     .limit(limit);
 
@@ -158,6 +168,28 @@ export async function closeShoppingRows(input: {
       cleared_at: new Date().toISOString(),
       ...(input.expenseId ? { expense_id: input.expenseId } : {}),
     })
+    .in('id', input.ids);
+
+  if (error) throw error;
+}
+
+/**
+ * Attaches a shop to the expense it turned out to be.
+ *
+ * Separate from closeShoppingRows() because it runs on rows that are already
+ * closed: paying is allowed to happen days after the shopping was put away,
+ * and re-stamping `cleared_at` would move when the list was tidied to when
+ * somebody got round to the money.
+ */
+export async function linkShoppingRows(input: {
+  ids: string[];
+  expenseId: string;
+}): Promise<void> {
+  if (input.ids.length === 0) return;
+
+  const { error } = await supabase
+    .from('todos')
+    .update({ expense_id: input.expenseId })
     .in('id', input.ids);
 
   if (error) throw error;

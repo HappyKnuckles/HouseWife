@@ -159,11 +159,69 @@ export function parseDateOnly(value: string): Date {
   return new Date(y, m - 1, d);
 }
 
+/**
+ * A *local* `YYYY-MM-DD` — never `toISOString`, which is UTC and so renders as
+ * the day before for any evening timestamp west of Greenwich.
+ *
+ * Takes a bare date through parseDateOnly() for the same reason, so passing a
+ * value straight back out of this function is always a no-op.
+ */
+export function dateIso(value: Date | string): string {
+  const date =
+    typeof value === 'string'
+      ? /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? parseDateOnly(value)
+        : new Date(value)
+      : value;
+
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${m}-${d}`;
+}
+
 export function todayIso(): string {
-  const now = new Date();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${m}-${d}`;
+  return dateIso(new Date());
+}
+
+/** `YYYY-MM-DD`, `days` later. Negative walks backwards. */
+export function shiftDays(iso: string, days: number): string {
+  const date = parseDateOnly(iso);
+  date.setDate(date.getDate() + days);
+  return dateIso(date);
+}
+
+/**
+ * What someone types into a date field: "4.8.2026", "04.08.2026", "4/8/2026",
+ * or an ISO date pasted in. Returns `YYYY-MM-DD`, or null so the caller can
+ * hold the field in an error state.
+ *
+ * A native date picker would be nicer for "next Tuesday" and worse for "the
+ * 3rd of May 1998" — an anniversary is usually years back, which is a lot of
+ * swiping. Typing handles both, and quick chips cover the near dates.
+ */
+export function parseGermanDate(input: string): string | null {
+  const trimmed = input.trim();
+  const match = trimmed.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);
+  if (!match) return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+
+  const [, d, m, y] = match;
+  const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  // Rejects 31.02.2026, which the regex alone happily accepts.
+  const back = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(back.getTime()) || back.toISOString().slice(0, 10) !== iso ? null : iso;
+}
+
+/**
+ * A `YYYY-MM-DD` as a timestamptz at *local noon*.
+ *
+ * Midnight is the obvious choice and the wrong one: it is only ever twelve
+ * hours from being the day before somewhere, so a date entered here could come
+ * back rendered as yesterday. Noon cannot land on the wrong day in any
+ * timezone, and nothing in this app shows the time an expense was booked.
+ */
+export function dateIsoToTimestamp(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0).toISOString();
 }
 
 /**

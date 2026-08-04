@@ -8,7 +8,16 @@ import { Card } from '../../../components/Card';
 import { Chip, Segmented } from '../../../components/Segmented';
 import { TextField } from '../../../components/TextField';
 import type { ExpenseItemInput, ProfileRow, SplitType } from '../../../lib/database.types';
-import { formatCents, parseAmountToCents } from '../../../lib/format';
+import {
+  dateIso,
+  dateIsoToTimestamp,
+  formatCents,
+  formatDate,
+  parseAmountToCents,
+  parseGermanDate,
+  shiftDays,
+  todayIso,
+} from '../../../lib/format';
 import { spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 import { EXPENSE_CATEGORIES, categoryMeta } from '../categories';
@@ -28,6 +37,8 @@ export interface ExpenseFormValues {
   paidBy: string;
   category: string | null;
   splitType: SplitType;
+  /** timestamptz. Defaults to today, but a shop is often booked days later. */
+  purchasedAt: string;
   items: ExpenseItemInput[];
   shares: { profile_id: string; share_cents: number }[] | null;
 }
@@ -39,9 +50,27 @@ export interface ExpenseFormInitial {
   paidBy?: string | null;
   category?: string | null;
   splitType?: SplitType;
+  /** timestamptz or a bare `YYYY-MM-DD`; only the day is ever shown. */
+  purchasedAt?: string;
   items?: { name: string; total_cents: number; paid_for: string | null }[];
   /** Cents per profile, for splitType 'shares'. */
   shares?: Record<string, number>;
+}
+
+/**
+ * What to store for the day the form is showing.
+ *
+ * A date left alone keeps the exact timestamp it arrived with — editing the
+ * title of an expense should not quietly move when it happened. That only
+ * applies to a real timestamptz, though: a bare `YYYY-MM-DD` (what the Einkauf
+ * checkout hands over) has no time of day to preserve and would be read as
+ * midnight UTC, so it goes through dateIsoToTimestamp() like anything else.
+ */
+function timestampFor(dayIso: string, initial: string | undefined): string {
+  const unchanged = !!initial && dateIso(initial) === dayIso;
+  const carriesTime = !!initial && !/^\d{4}-\d{2}-\d{2}$/.test(initial);
+
+  return unchanged && carriesTime ? initial : dateIsoToTimestamp(dayIso);
 }
 
 /**
@@ -95,6 +124,11 @@ export function ExpenseForm({
     initial?.totalCents != null ? (initial.totalCents / 100).toFixed(2).replace('.', ',') : '',
   );
   const [paidBy, setPaidBy] = useState<string | null>(initial?.paidBy ?? null);
+  // Held as typed text, not as a date: a half-finished "4.8." has to survive
+  // being on screen, and there is no Date that means that.
+  const [purchasedOn, setPurchasedOn] = useState(() =>
+    formatDate(initial?.purchasedAt ? dateIso(initial.purchasedAt) : todayIso()),
+  );
   const [category, setCategory] = useState<string | null>(initial?.category ?? null);
   const [splitType, setSplitType] = useState<SplitType>(initial?.splitType ?? 'equal');
   const [customOpen, setCustomOpen] = useState(false);
@@ -177,15 +211,20 @@ export function ExpenseForm({
   );
 
   const splitError = totalCents > 0 && splitType === 'shares' ? validateSplit(totalCents, shares) : null;
-  const canSave = title.trim().length > 0 && totalCents > 0 && !!payer && !splitError && !submitting;
+  const purchasedIso = parseGermanDate(purchasedOn);
+  const canSave =
+    title.trim().length > 0 && totalCents > 0 && !!payer && !!purchasedIso && !splitError && !submitting;
 
   function submit() {
+    if (!purchasedIso) return;
+
     onSubmit({
       title: title.trim(),
       totalCents,
       paidBy: payer,
       category,
       splitType,
+      purchasedAt: timestampFor(purchasedIso, initial?.purchasedAt),
       items: splitType === 'items' ? itemInputs : [],
       shares:
         splitType === 'shares'
@@ -206,6 +245,30 @@ export function ExpenseForm({
         keyboardType="decimal-pad"
         hint="Komma oder Punkt, beides geht."
       />
+
+      {/* Backdating, which is the normal case rather than the exception: the
+          shop happens on Saturday and gets typed in on Tuesday. Without this
+          the expense lands in whatever month it was entered, which is invisible
+          until it straddles a month end and the Statistik goes wrong. */}
+      <View style={styles.field}>
+        <TextField
+          label="Wann"
+          value={purchasedOn}
+          onChangeText={setPurchasedOn}
+          placeholder="TT.MM.JJJJ"
+          keyboardType="numbers-and-punctuation"
+          error={purchasedOn.trim().length > 0 && !purchasedIso ? 'Bitte als TT.MM.JJJJ eingeben.' : null}
+        />
+        {/* Backwards only — you cannot have already paid for next Tuesday. */}
+        <View style={styles.chipRow}>
+          <Chip label="Heute" onPress={() => setPurchasedOn(formatDate(todayIso()))} />
+          <Chip label="Gestern" onPress={() => setPurchasedOn(formatDate(shiftDays(todayIso(), -1)))} />
+          <Chip
+            label="Vorgestern"
+            onPress={() => setPurchasedOn(formatDate(shiftDays(todayIso(), -2)))}
+          />
+        </View>
+      </View>
 
       <View style={styles.field}>
         <Text style={styles.label}>Wer hat bezahlt?</Text>

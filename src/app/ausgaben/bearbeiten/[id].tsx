@@ -70,6 +70,7 @@ export default function EditExpenseScreen() {
             paidBy: expense.paid_by,
             category: expense.category,
             splitType: expense.split_type,
+            purchasedAt: expense.purchased_at,
             items: expense.expense_items
               .slice()
               .sort((a, b) => a.position - b.position)

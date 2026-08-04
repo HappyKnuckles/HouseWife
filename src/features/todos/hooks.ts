@@ -174,3 +174,12 @@ export function useCloseShoppingRows() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
   });
 }
+
+/** Attaches an already-closed shop to the expense it was billed into. */
+export function useLinkShoppingRows() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { ids: string[]; expenseId: string }) => api.linkShoppingRows(input),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+}

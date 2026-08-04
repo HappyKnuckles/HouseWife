@@ -517,6 +517,21 @@ backfilling a year of missed bills. Pausing (`is_active = false`) is the intende
 "stop this" — deleting is also fine, it just leaves the already-generated expenses
 behind with nothing pointing at them.
 
+### An expense is dated, not timestamped-on-entry
+
+`purchased_at` is a field on the form, defaulting to today with *Heute / Gestern
+/ Vorgestern* chips — backwards only, since you cannot already have paid for
+next Tuesday. Entering Saturday's shop on Tuesday is the normal case, and
+stamping it `now()` is invisible until it crosses a month end, at which point
+`v_expense_category_month` files it under the wrong month and the Statistik is
+quietly wrong.
+
+Saved at **local noon**, not midnight: midnight is only ever twelve hours from
+being the previous day somewhere, and nothing in the app displays the time. An
+untouched date on the edit screen keeps its original timestamp verbatim rather
+than being flattened — changing a title should not move when the money was
+spent.
+
 ### Stats
 
 Two views, both `security_invoker` like every other view here.
@@ -681,10 +696,62 @@ only creates a catalog entry when nothing matched, so "Käse" doesn't become a
 new product every time you buy cheese. Stock recovering is what deletes the
 Einkaufsliste row, so the loop closes itself — nobody ticks anything twice.
 
-Then it hands over to **/ausgaben/neu**, prefilled with a title and category.
+**Each row opens on the shelf that already holds most of this product** — by
+`product_id` for generated rows, by normalised name for hand-written ones,
+falling back to the product's configured `default_location_id`. What the
+household actually does beats what someone once configured. The location is
+written into the allocation outright rather than left blank for the RPC to
+resolve, so the row states where the thing is going instead of hoping. Where
+nothing is known it says **"Kein Ort"**, which is then literally true — and that
+chip is offered *only* where it would be, because `inventory_add_stock()` falls
+back to `default_location_id` when passed no location, so on a product that has
+one, "no location" is not a thing the database can be asked for.
+
+Then it hands over to **/ausgaben/neu**, prefilled with the date the last row
+was ticked off, a title, a category and the bought items as **Pro-Posten rows
+at 0 €** — the names are the tedious part
+of itemising a shop and the list already knows them, so all that is left is
+typing prices, and only if you want to. They stay invisible under the other two
+split modes. The names go over bare, without counts: `expense_items.name` is
+what `v_shopping_suggestions` joins on, and "3 × Milch" would quietly become its
+own thing that never matches "Milch" again.
+
 That screen already knows how to split a total, pick a payer and photograph a
 receipt; a second, poorer copy of that form inside the checkout would have been
 one more thing to keep in step with `apply_expense_split()`.
+
+**Skipping the expense is a first-class path, not a dead end.** Putting the
+shopping away and paying for it are separate acts that routinely happen days
+apart, so the Einkaufshistorie offers *"Ausgabe buchen"* on any shop that has
+none — same prefill, same handover, and the link lands identically. The row ids
+travel as a `link` query param and `/ausgaben/neu` stamps `todos.expense_id`
+once the expense exists, which is what makes a shop and its money one thing
+after the fact.
+
+**A shop is a `cleared_at`, not a day.** "Einkauf abschließen" closes its rows
+in one UPDATE with one timestamp, so rows sharing a `cleared_at` are exactly
+the rows that went through the checkout together — the trip identity comes free
+and there is no `shopping_trips` table to keep in step. Two shops on a Saturday
+are two blocks, each with its own expense; grouping by calendar day merged the
+Aldi run into the Rewe run and could only ever book one expense for both.
+
+The history is therefore two levels: **the date is the heading**, and each
+checkout under it is a separated card carrying its own count and its own
+*Ausgabe buchen*. Deliberately no time of day on either — a shop is not a
+timestamp, and the cards already say there were two of them.
+
+**A hand-written row learns its product.** `inventory_scan_in()` returns the lot
+it created or topped up, and the checkout writes that `product_id` back onto the
+`todos` row. Without it a typed "Milch" stayed product-less forever — in the
+inventory, but with nothing in the history able to point at it, so a restock row
+had a link to the product and a hand-written one did not. Safe against
+`sync_restock_todos()`, whose delete is guarded on `source = 'restock' and not
+is_done`; these rows are manual and done.
+
+That stamping is `linkShoppingRows()`, deliberately separate from
+`closeShoppingRows()`: it writes only `expense_id`. Reusing the close would
+re-stamp `cleared_at` and move "when the list was tidied" to "when somebody got
+round to the money".
 
 `todos.quantity` is `numeric`, not an integer — the inventory has dealt in
 halves since 0025, and "0,5 kg Hack" is a normal thing to write on a list. On

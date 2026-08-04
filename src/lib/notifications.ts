@@ -27,11 +27,18 @@ Notifications.setNotificationHandler({
 
 export type PushRegistrationResult =
   | { status: 'registered'; token: string }
+  /** Nothing is wrong — this device simply has not been registered yet. */
+  | { status: 'off' }
   | { status: 'denied' }
   | { status: 'simulator' }
   | { status: 'expo-go' }
   | { status: 'unconfigured' }
   | { status: 'error'; message: string };
+
+/** The states where offering an "Aktivieren" button would be a lie. */
+export function pushIsPossible(result: PushRegistrationResult | null): boolean {
+  return !result || (result.status !== 'simulator' && result.status !== 'expo-go' && result.status !== 'unconfigured');
+}
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -102,8 +109,49 @@ export async function registerPushToken(
   }
 }
 
+/**
+ * Whether *this* device is currently registered — read, not remembered.
+ *
+ * The settings screen used to show only what happened since it was opened, so
+ * a phone that had been receiving reminders for weeks still said "noch nicht
+ * registriert" on every fresh start. The token is the identity here: a
+ * household has several, and only the one this device mints says anything
+ * about this device.
+ *
+ * Costs a permissions check and one indexed lookup, and never prompts —
+ * getExpoPushTokenAsync only asks the OS when permission is already granted.
+ */
+export async function inspectPushToken(): Promise<PushRegistrationResult> {
+  if (isExpoGo) return { status: 'expo-go' };
+  if (!Device.isDevice) return { status: 'simulator' };
+  if (!env.easProjectId) return { status: 'unconfigured' };
+
+  try {
+    const permission = await Notifications.getPermissionsAsync();
+    // Never asked is not the same as refused: one is a button away, the other
+    // needs a trip into the system settings.
+    if (!permission.granted) return permission.canAskAgain ? { status: 'off' } : { status: 'denied' };
+
+    const { data: token } = await Notifications.getExpoPushTokenAsync({
+      projectId: env.easProjectId,
+    });
+
+    const { data, error } = await supabase
+      .from('push_tokens')
+      .select('token, disabled_at')
+      .eq('token', token)
+      .maybeSingle();
+
+    if (error) return { status: 'error', message: error.message };
+    return data && !data.disabled_at ? { status: 'registered', token } : { status: 'off' };
+  } catch (err) {
+    return { status: 'error', message: String(err) };
+  }
+}
+
 export const pushStatusMessage: Record<PushRegistrationResult['status'], string> = {
   registered: 'Erinnerungen sind aktiv.',
+  off: 'Auf diesem Gerät aus.',
   denied: 'Benachrichtigungen sind in den Systemeinstellungen deaktiviert.',
   simulator: 'Push funktioniert nur auf einem echten Gerät.',
   'expo-go': 'Push funktioniert nicht in Expo Go — dafür wird ein Development Build gebraucht.',

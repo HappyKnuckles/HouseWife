@@ -6,7 +6,7 @@ import { Card } from '../../../components/Card';
 import { Chip, Segmented } from '../../../components/Segmented';
 import { TextField } from '../../../components/TextField';
 import type { EventKind } from '../../../lib/database.types';
-import { formatDate, todayIso } from '../../../lib/format';
+import { formatDate, parseGermanDate, shiftDays, todayIso } from '../../../lib/format';
 import { spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 import type { EventInput } from '../api';
@@ -19,34 +19,10 @@ const KIND_OPTIONS: { value: EventKind; label: string }[] = [
 
 const REMIND_CHOICES = [0, 1, 3, 7, 14];
 
-/**
- * Dates are typed as TT.MM.JJJJ and stored as ISO.
- *
- * A native date picker would be nicer for "next Tuesday" and worse for "the
- * 3rd of May 1998" — an anniversary is usually years back, which is a lot of
- * swiping. Typing handles both, and the quick chips cover the near dates.
- */
-function parseGermanDate(input: string): string | null {
-  const trimmed = input.trim();
-  const match = trimmed.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);
-  if (!match) return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
-
-  const [, d, m, y] = match;
-  const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  // Rejects 31.02.2026, which the regex alone happily accepts.
-  const back = new Date(`${iso}T00:00:00Z`);
-  return Number.isNaN(back.getTime()) || back.toISOString().slice(0, 10) !== iso ? null : iso;
-}
-
-function toGerman(iso: string): string {
-  return formatDate(iso);
-}
-
-function shiftToday(days: number): string {
-  const d = new Date(`${todayIso()}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
+// Dates are typed as TT.MM.JJJJ and stored as ISO — parseGermanDate() in
+// lib/format.ts explains why typing beats a picker here.
+const toGerman = (iso: string) => formatDate(iso);
+const shiftToday = (days: number) => shiftDays(todayIso(), days);
 
 export interface EventFormInitial extends Partial<EventInput> {}
 

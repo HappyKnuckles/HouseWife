@@ -133,6 +133,22 @@ export function useProductSearch(query: string) {
   });
 }
 
+/**
+ * Default locations for a set of products, in one round trip.
+ *
+ * Sorted into the key so that the same set of ids in a different order is the
+ * same cache entry — the caller derives them from a list whose order changes
+ * as things are ticked off.
+ */
+export function useProductDefaultLocations(productIds: string[]) {
+  const ids = [...productIds].sort();
+  return useQuery({
+    queryKey: ['inventory', 'product-defaults', ids],
+    queryFn: () => api.fetchProductDefaultLocations(ids),
+    enabled: ids.length > 0,
+  });
+}
+
 export function useProduct(productId: string | null) {
   return useQuery({
     queryKey: ['inventory', 'product', productId],

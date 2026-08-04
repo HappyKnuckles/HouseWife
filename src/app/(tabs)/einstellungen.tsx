@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, Share, Switch, Text, View } from 'react-native';
 
 import { Avatar } from '../../components/Avatar';
@@ -19,7 +19,14 @@ import {
 import { Alert } from '../../lib/alert';
 import { errorMessage } from '../../lib/errors';
 import { formatDateTime, relativeTime } from '../../lib/format';
-import { describePushResult, registerPushToken, type PushRegistrationResult } from '../../lib/notifications';
+import {
+  describePushResult,
+  disablePushToken,
+  inspectPushToken,
+  pushIsPossible,
+  registerPushToken,
+  type PushRegistrationResult,
+} from '../../lib/notifications';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles, type ThemePreference } from '../../lib/theme-context';
 
@@ -72,7 +79,15 @@ export default function SettingsScreen() {
   const updateHousehold = useUpdateHousehold();
 
   const [inviteCode, setInviteCode] = useState<string | null>(null);
+  /** null = still being read; see inspectPushToken(). */
   const [push, setPush] = useState<PushRegistrationResult | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+
+  // Read once on mount so the card reports what is actually true of this
+  // device rather than only what has been tapped since the screen opened.
+  useEffect(() => {
+    void inspectPushToken().then(setPush);
+  }, []);
 
   const canInvite = (members?.length ?? 0) < (household?.max_members ?? 2);
 
@@ -90,11 +105,36 @@ export default function SettingsScreen() {
 
   async function enablePush() {
     if (!householdId || !profile) return;
-    const result = await registerPushToken(householdId, profile.id);
-    setPush(result);
 
-    if (result.status !== 'registered') {
-      Alert.alert('Push nicht aktiviert', describePushResult(result));
+    setPushBusy(true);
+    try {
+      const result = await registerPushToken(householdId, profile.id);
+      setPush(result);
+
+      if (result.status !== 'registered') {
+        Alert.alert('Push nicht aktiviert', describePushResult(result));
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  /**
+   * Off on this device only. The row is soft-disabled rather than deleted, so
+   * household-tick skips it and re-enabling later is the same one tap — and
+   * the other phone keeps its reminders either way.
+   */
+  async function disablePush() {
+    if (push?.status !== 'registered') return;
+
+    setPushBusy(true);
+    try {
+      await disablePushToken(push.token);
+      setPush({ status: 'off' });
+    } catch (err) {
+      Alert.alert('Konnte nicht deaktiviert werden', errorMessage(err));
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -127,18 +167,23 @@ export default function SettingsScreen() {
       // button below into "Jetzt neu starten".
       await Updates.fetchUpdateAsync();
     } catch (err) {
-      // The two failures that are not really failures: a build that was not
-      // made by EAS carries no channel, and a build whose fingerprint no longer
-      // matches any published update has nothing to be offered. Both come back
-      // as an error rather than `isAvailable: false`, and neither is fixable
-      // from this screen — so say which one it is instead of the raw string.
+      // The failures that are not really failures: a build that was not made
+      // by EAS carries no channel, and a build whose fingerprint matches no
+      // published update has nothing to be offered. Both surface as a thrown
+      // error rather than `isAvailable: false` — and on Android the thrown
+      // text is the entirely uninformative "Failed to check for update", which
+      // is why that has to be matched too. Neither is fixable from this
+      // screen, so say which one it is instead of repeating the raw string.
       const message = errorMessage(err);
-      const noChannel = /channel|runtime ?version|no compatible|not found|404/i.test(message);
+      const nothingPublished =
+        /channel|runtime ?version|no compatible|not found|404|failed to (check|download)/i.test(
+          message,
+        );
 
       Alert.alert(
         'Update fehlgeschlagen',
-        noChannel
-          ? `${message}\n\nDiese Installation ist keinem Update-Kanal zugeordnet oder ihre Runtime-Version passt zu keinem veröffentlichten Update. Das trifft auf lokal gebaute APKs zu — nur EAS-Builds (preview/production) bekommen OTA-Updates.`
+        nothingPublished
+          ? `${message}\n\nWahrscheinlich gibt es für diesen Build kein passendes Update: entweder ist die Installation keinem Kanal zugeordnet — lokal gebaute APKs sind das nie, nur EAS-Builds bekommen OTA — oder für ihre Runtime-Version wurde noch nichts veröffentlicht. Nach jedem neuen Build muss einmal "npm run update:preview" laufen, sonst hat der Kanal für diesen Fingerprint nichts anzubieten.`
           : message,
       );
     }
@@ -196,10 +241,28 @@ export default function SettingsScreen() {
             <View style={styles.switchText}>
               <Text style={styles.rowTitle}>Push auf diesem Gerät</Text>
               <Text style={styles.rowHint}>
-                {push ? describePushResult(push) : 'Noch nicht registriert.'}
+                {push ? describePushResult(push) : 'Wird geprüft…'}
               </Text>
             </View>
-            <Button label="Aktivieren" variant="secondary" onPress={() => void enablePush()} />
+
+            {/* The button is the state, not a wish: once this device is
+                registered the only thing left to offer is turning it off. */}
+            {push?.status === 'registered' ? (
+              <Button
+                label="Deaktivieren"
+                variant="ghost"
+                loading={pushBusy}
+                onPress={() => void disablePush()}
+              />
+            ) : (
+              <Button
+                label="Aktivieren"
+                variant="secondary"
+                loading={pushBusy}
+                disabled={!pushIsPossible(push)}
+                onPress={() => void enablePush()}
+              />
+            )}
           </View>
 
           <View style={styles.divider} />

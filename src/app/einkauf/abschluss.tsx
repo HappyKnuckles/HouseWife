@@ -7,11 +7,19 @@ import { Button } from '../../components/Button';
 import { Card, EmptyState } from '../../components/Card';
 import { Chip } from '../../components/Segmented';
 import { LoadingState, Screen } from '../../components/Screen';
-import { useAddStock, useLocations, useScanIn } from '../../features/inventory/hooks';
-import { useCloseShoppingRows, useTodos } from '../../features/todos/hooks';
+import type { InventoryItemWithRefs } from '../../features/inventory/api';
+import {
+  useAddStock,
+  useInventoryItems,
+  useLocations,
+  useProductDefaultLocations,
+  useScanIn,
+} from '../../features/inventory/hooks';
+import { useCloseShoppingRows, useTodos, useUpdateTodo } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
+import type { TodoRow } from '../../lib/database.types';
 import { errorMessage } from '../../lib/errors';
-import { formatQuantity } from '../../lib/format';
+import { dateIso, formatQuantity } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -43,6 +51,12 @@ const nextKey = () => `alloc-${++allocationCounter}`;
  * than a separate figure they have to agree with — splitting moves stock
  * between shelves instead of inventing it, and there is no way to leave the
  * screen in a state where the two disagree.
+ *
+ * Each row opens on the shelf it already lives on — the one holding most of
+ * this product today, which is a better answer than any configured default
+ * because it is what the household actually does. That location is written
+ * into the allocation outright rather than left blank and resolved later, so
+ * the row says where the thing is going and is not merely hoping.
  *
  * Money is deliberately not here. It belongs on the Ausgaben screen, which
  * already knows how to split a total, pick a payer and photograph a receipt,
@@ -103,11 +117,95 @@ export default function ShoppingCheckoutScreen() {
 
   const { data: items, isLoading } = useTodos('shopping');
   const { data: locations } = useLocations();
+  const { data: inventory, isLoading: inventoryLoading } = useInventoryItems();
   const addStock = useAddStock();
   const scanIn = useScanIn();
   const closeRows = useCloseShoppingRows();
+  const updateRow = useUpdateTodo();
 
   const bought = useMemo(() => (items ?? []).filter((t) => t.is_done), [items]);
+
+  // Only the generated rows know a product id; a hand-written one is matched
+  // by name, the same way inventory_scan_in() does it server-side.
+  const productIds = useMemo(
+    () => [...new Set(bought.map((row) => row.product_id).filter((id): id is string => !!id))],
+    [bought],
+  );
+  const { data: productDefaults, isLoading: defaultsLoading } =
+    useProductDefaultLocations(productIds);
+
+  /**
+   * Where each product already keeps most of its stock.
+   *
+   * The best available answer to "where does this go", and a better one than
+   * the product's configured default: the default is what somebody once said,
+   * this is what the household actually does. Summed per location first,
+   * because a product can hold several lots in one place once expiry dates
+   * differ, and three small jars beat one big one only in lot count.
+   *
+   * Keyed twice over the same pass — by product id for the generated rows and
+   * by normalised name for the hand-written ones, which have no id to go on.
+   */
+  const stockedLocations = useMemo(() => {
+    const byProduct = new Map<string, Map<string, number>>();
+    const byName = new Map<string, Map<string, number>>();
+
+    const add = (
+      index: Map<string, Map<string, number>>,
+      key: string,
+      item: InventoryItemWithRefs,
+    ) => {
+      if (!item.location_id) return;
+      const perLocation = index.get(key) ?? new Map<string, number>();
+      perLocation.set(item.location_id, (perLocation.get(item.location_id) ?? 0) + item.quantity);
+      index.set(key, perLocation);
+    };
+
+    for (const item of inventory ?? []) {
+      add(byProduct, item.product_id, item);
+      const name = item.products?.name?.trim().toLowerCase();
+      if (name) add(byName, name, item);
+    }
+
+    return { byProduct, byName };
+  }, [inventory]);
+
+  /**
+   * The place this row's shopping should land: the fullest shelf it already
+   * lives on, or failing that the product's configured default — which is what
+   * inventory_add_stock() would fall back to anyway, so showing it is telling
+   * the truth rather than making a suggestion.
+   *
+   * Null means nowhere is known, and nowhere is genuinely where it will go.
+   */
+  const suggestLocation = (row: { title: string; product_id: string | null }): string | null => {
+    const perLocation = row.product_id
+      ? stockedLocations.byProduct.get(row.product_id)
+      : stockedLocations.byName.get(row.title.trim().toLowerCase());
+
+    let best: string | null = null;
+    let most = 0;
+    for (const [locationId, quantity] of perLocation ?? []) {
+      if (quantity > most) {
+        most = quantity;
+        best = locationId;
+      }
+    }
+
+    return best ?? configuredDefault(row.product_id);
+  };
+
+  /**
+   * The product's configured default, which matters twice over: it is the
+   * second-choice suggestion above, and it is also what inventory_add_stock()
+   * silently falls back to when no location is passed. Where one is set,
+   * "Kein Ort" is therefore not something this screen can honestly offer —
+   * see the picker below.
+   */
+  function configuredDefault(productId: string | null): string | null {
+    if (!productId) return null;
+    return productDefaults?.find((p) => p.id === productId)?.default_location_id ?? null;
+  }
 
   /** Allocations by row id — where each bought item is going, and how many. */
   const [plan, setPlan] = useState<Record<string, Allocation[]>>({});
@@ -118,6 +216,11 @@ export default function ShoppingCheckoutScreen() {
   const [seeded, setSeeded] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // Waited for rather than seeded twice: the suggested location comes out of
+  // the inventory, and re-seeding once it arrives would overwrite whatever had
+  // already been tapped in the meantime.
+  if (isLoading || inventoryLoading || defaultsLoading) return <LoadingState />;
+
   // Seeded during render rather than in an effect: the values come straight
   // from the query, and an effect would paint one frame of empty steppers.
   if (!seeded && bought.length > 0) {
@@ -125,24 +228,32 @@ export default function ShoppingCheckoutScreen() {
       Object.fromEntries(
         bought.map((row) => [
           row.id,
-          // One allocation, no location — "wherever it usually lives".
-          [{ key: nextKey(), locationId: null, quantity: row.quantity }],
+          // One allocation, pointed at wherever this already lives — the
+          // location is set outright rather than left null, so what the row
+          // says is what gets booked.
+          [{ key: nextKey(), locationId: suggestLocation(row), quantity: row.quantity }],
         ]),
       ),
     );
     setSeeded(true);
   }
 
-  if (isLoading) return <LoadingState />;
+  const allocationsFor = (row: TodoRow): Allocation[] =>
+    plan[row.id] ?? [
+      { key: `seed-${row.id}`, locationId: suggestLocation(row), quantity: row.quantity },
+    ];
 
-  const allocationsFor = (row: { id: string; quantity: number }): Allocation[] =>
-    plan[row.id] ?? [{ key: `seed-${row.id}`, locationId: null, quantity: row.quantity }];
-
-  const totalFor = (row: { id: string; quantity: number }) =>
+  const totalFor = (row: TodoRow) =>
     allocationsFor(row).reduce((sum, allocation) => sum + allocation.quantity, 0);
 
-  const locationName = (id: string | null) =>
-    id ? ((locations ?? []).find((l) => l.id === id)?.path ?? 'Ort') : 'Wie immer';
+  const pathFor = (id: string) => (locations ?? []).find((l) => l.id === id)?.path ?? 'Ort';
+
+  /**
+   * Null is now a real answer rather than a deferral: the allocation is seeded
+   * with an actual location whenever one is known, so reaching here means
+   * nothing is, and the lot really will be booked without a place.
+   */
+  const locationName = (id: string | null) => (id ? pathFor(id) : 'Kein Ort');
 
   function update(rowId: string, next: (current: Allocation[]) => Allocation[]) {
     setPlan((prev) => ({ ...prev, [rowId]: next(prev[rowId] ?? []) }));
@@ -198,6 +309,11 @@ export default function ShoppingCheckoutScreen() {
     for (const row of bought) {
       if (skipped[row.id]) continue;
 
+      // Which product this row turned out to be. Known upfront for a restock
+      // row; for a hand-written one only inventory_scan_in() can say, because
+      // only it knows whether the name matched something or made a new entry.
+      let productId = row.product_id;
+
       // One call per shelf. Sequential because each writes a movement row and
       // fires the restock trigger; a whole shop is a couple of dozen at most.
       for (const allocation of allocationsFor(row)) {
@@ -217,11 +333,25 @@ export default function ShoppingCheckoutScreen() {
           // only if nothing matched — which is what stops "Käse" becoming a
           // second product every time you buy cheese. Two allocations of the
           // same name therefore land on one product in two locations.
-          await scanIn.mutateAsync({
+          const item = await scanIn.mutateAsync({
             name: row.title,
             quantity: allocation.quantity,
             locationId: allocation.locationId,
           });
+          productId = item.product_id;
+        }
+      }
+
+      // Write it back onto the row. Without this a hand-written entry stays
+      // product-less forever — it is in the inventory, but the history has no
+      // way to point at it, so "Milch" typed by hand had no link to open while
+      // "Milch" from a restock reminder did. Best-effort: the stock is already
+      // booked, and a failed cross-reference must not undo that.
+      if (productId && productId !== row.product_id) {
+        try {
+          await updateRow.mutateAsync({ id: row.id, patch: { product_id: productId } });
+        } catch {
+          // The link is a convenience; the shopping and the stock are not.
         }
       }
     }
@@ -233,9 +363,36 @@ export default function ShoppingCheckoutScreen() {
       if (withStock) await bookStock();
       await closeRows.mutateAsync({ ids: bought.map((row) => row.id) });
 
+      // Every bought row, including the ones left out of the inventory —
+      // skipping the Klopapier from the shelves does not stop you paying for
+      // it. Bare titles, no counts: expense_items.name is what
+      // v_shopping_suggestions joins on, so "3 × Milch" would quietly become
+      // its own thing that never matches "Milch" again.
+      const items = bought.map((row) => row.title).join('\n');
+
+      // When the shop happened, which is when the last thing was ticked off —
+      // not now. Checking out on Tuesday for a Saturday shop is normal, and
+      // dating it today would file it in the wrong month often enough to make
+      // the Statistik lie.
+      const doneAt = bought
+        .map((row) => row.done_at)
+        .filter((at): at is string => !!at)
+        .sort()
+        .at(-1);
+
       // replace, not push: going "back" to a checkout for a list that is now
       // empty is a dead end.
-      router.replace('/ausgaben/neu?title=Einkauf&category=Lebensmittel');
+      // The ids travel too, so saving the expense stamps them back onto these
+      // rows. Skipping the expense here costs nothing: the Einkaufshistorie can
+      // book one against this shop later and the link lands just the same.
+      const query = new URLSearchParams({
+        title: 'Einkauf',
+        category: 'Lebensmittel',
+        items,
+        link: bought.map((row) => row.id).join(','),
+        ...(doneAt ? { date: dateIso(doneAt) } : {}),
+      });
+      router.replace(`/ausgaben/neu?${query.toString()}`);
     } catch (err) {
       Alert.alert('Konnte nicht eingeräumt werden', errorMessage(err));
     } finally {
@@ -261,6 +418,13 @@ export default function ShoppingCheckoutScreen() {
             <Text style={styles.hint}>
               Die Zahl steht auf dem, was du aufgeschrieben hast. Änder sie, wenn es mehr geworden
               ist — und teil auf, wenn nicht alles an denselben Ort kommt.
+            </Text>
+            {/* Said out loud rather than left to be discovered: the checkbox
+                is the only thing on the screen whose off-state is the useful
+                one, and "wird heute gegessen" is a normal half of a shop. */}
+            <Text style={styles.hint}>
+              Nimm den Haken weg bei allem, was nicht eingeräumt werden soll — Sachen, die sowieso
+              gleich gegessen werden.
             </Text>
 
             {bought.map((row, index) => {
@@ -405,18 +569,26 @@ export default function ShoppingCheckoutScreen() {
 
                             {open ? (
                               <View style={styles.chipRow}>
-                                <Chip
-                                  label="Wie immer"
-                                  active={!allocation.locationId}
-                                  onPress={() => {
-                                    update(row.id, (current) =>
-                                      current.map((a) =>
-                                        a.key === allocation.key ? { ...a, locationId: null } : a,
-                                      ),
-                                    );
-                                    setPicking(null);
-                                  }}
-                                />
+                                {/* Offered only where it is true. For a
+                                    product with a configured default,
+                                    booking without a location lands in that
+                                    default anyway, so a "Kein Ort" chip
+                                    would describe something that does not
+                                    happen — pick a real shelf instead. */}
+                                {configuredDefault(row.product_id) === null ? (
+                                  <Chip
+                                    label="Kein Ort"
+                                    active={!allocation.locationId}
+                                    onPress={() => {
+                                      update(row.id, (current) =>
+                                        current.map((a) =>
+                                          a.key === allocation.key ? { ...a, locationId: null } : a,
+                                        ),
+                                      );
+                                      setPicking(null);
+                                    }}
+                                  />
+                                ) : null}
                                 {(locations ?? []).map((location) => (
                                   <Chip
                                     key={location.id}

@@ -15,14 +15,41 @@ import {
 import { useCreateExpense, useUploadReceipt } from '../../features/expenses/hooks';
 import { requestOcr } from '../../features/expenses/ocr';
 import { useMembers } from '../../features/household/hooks';
+import { useLinkShoppingRows } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
 import { errorMessage } from '../../lib/errors';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
+/** Comma-separated todo ids from whichever screen handed this shop over. */
+function linkIdsFromParams(raw: string | string[] | undefined): string[] {
+  return typeof raw === 'string' ? raw.split(',').filter(Boolean) : [];
+}
+
+/** Newline-separated names from the Einkaufsliste checkout, if it sent any. */
+function itemsFromParams(raw: string | string[] | undefined) {
+  if (typeof raw !== 'string') return undefined;
+
+  const names = raw
+    .split('\n')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+
+  return names.length > 0
+    ? names.map((name) => ({ name, total_cents: 0, paid_for: null }))
+    : undefined;
+}
+
 export default function NewExpenseScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ title?: string; category?: string }>();
+  const params = useLocalSearchParams<{
+    title?: string;
+    category?: string;
+    items?: string;
+    date?: string;
+    /** Comma-separated todo ids to stamp with this expense once it exists. */
+    link?: string;
+  }>();
   const { profile } = useAuth();
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
@@ -37,6 +64,7 @@ export default function NewExpenseScreen() {
   const { data: members, isLoading } = useMembers();
   const createExpense = useCreateExpense();
   const uploadReceipt = useUploadReceipt();
+  const linkRows = useLinkShoppingRows();
 
   const [receiptUri, setReceiptUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -75,6 +103,21 @@ export default function NewExpenseScreen() {
         void requestOcr(receipt.id).catch(() => undefined);
       }
 
+      // Stamp the shop this expense paid for, so the Einkaufshistorie can show
+      // the two as one thing. Its own try: the expense is saved either way, and
+      // reporting that as a failed save would be a lie about the money.
+      const ids = linkIdsFromParams(params.link);
+      if (ids.length > 0) {
+        try {
+          await linkRows.mutateAsync({ ids, expenseId: expense.id });
+        } catch (err) {
+          Alert.alert(
+            'Ausgabe gespeichert',
+            `Der Einkauf konnte nicht damit verknüpft werden: ${errorMessage(err)}`,
+          );
+        }
+      }
+
       router.back();
     } catch (err) {
       Alert.alert('Konnte nicht gespeichert werden', errorMessage(err));
@@ -88,13 +131,23 @@ export default function NewExpenseScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <ExpenseForm
           members={members ?? []}
-          // `title`/`category` come in as query params when another screen
-          // hands over — the Einkaufsliste checkout does, so the shop you just
-          // finished arrives here already named instead of being retyped.
+          // `title`/`category`/`items` come in as query params when another
+          // screen hands over — the Einkaufsliste checkout does, so the shop
+          // you just finished arrives here already named instead of being
+          // retyped.
+          //
+          // The items are seeded at 0 €, so they cost nothing until a price is
+          // typed and stay invisible unless you switch the split to "Pro
+          // Posten". That is the point: the names are the tedious part of
+          // itemising a shop, and they are the part the list already knows.
           initial={{
             paidBy: profile?.id ?? null,
             title: typeof params.title === 'string' ? params.title : undefined,
             category: typeof params.category === 'string' ? params.category : undefined,
+            items: itemsFromParams(params.items),
+            // The day the shopping was actually ticked off, which is not
+            // necessarily today — the checkout can be reached long after.
+            purchasedAt: typeof params.date === 'string' ? params.date : undefined,
           }}
           submitLabel="Ausgabe speichern"
           submitting={saving}

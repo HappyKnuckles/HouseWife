@@ -241,6 +241,29 @@ export async function searchProducts(
   return data ?? [];
 }
 
+/**
+ * Where each of these products is put away when nobody says otherwise.
+ *
+ * Only the two columns, and only for the ids asked about: the caller is the
+ * Einkauf checkout, which needs to know whether "no location" means "the usual
+ * shelf" or genuinely nowhere — inventory_add_stock() falls back to
+ * default_location_id and inventory_scan_in() does not, so the honest label
+ * differs per row and cannot be guessed.
+ */
+export async function fetchProductDefaultLocations(
+  productIds: string[],
+): Promise<Pick<ProductRow, 'id' | 'default_location_id'>[]> {
+  if (productIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, default_location_id')
+    .in('id', productIds);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function fetchProduct(productId: string): Promise<ProductRow | null> {
   const { data, error } = await supabase
     .from('products')
