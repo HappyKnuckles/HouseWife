@@ -32,12 +32,20 @@ export type PushRegistrationResult =
   | { status: 'denied' }
   | { status: 'simulator' }
   | { status: 'expo-go' }
+  /** Browser or home-screen PWA — no Expo push token exists there at all. */
+  | { status: 'web' }
   | { status: 'unconfigured' }
   | { status: 'error'; message: string };
 
 /** The states where offering an "Aktivieren" button would be a lie. */
 export function pushIsPossible(result: PushRegistrationResult | null): boolean {
-  return !result || (result.status !== 'simulator' && result.status !== 'expo-go' && result.status !== 'unconfigured');
+  return (
+    !result ||
+    (result.status !== 'simulator' &&
+      result.status !== 'expo-go' &&
+      result.status !== 'web' &&
+      result.status !== 'unconfigured')
+  );
 }
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -54,6 +62,11 @@ export async function registerPushToken(
   householdId: string,
   profileId: string,
 ): Promise<PushRegistrationResult> {
+  // Before the Expo Go check, because the web build is neither Expo Go nor a
+  // simulator and would otherwise fall through to getExpoPushTokenAsync — which
+  // wants a VAPID key it was never given and fails with a Firebase error that
+  // says nothing about the actual reason.
+  if (Platform.OS === 'web') return { status: 'web' };
   if (isExpoGo) return { status: 'expo-go' };
   if (!Device.isDevice) return { status: 'simulator' };
   if (!env.easProjectId) return { status: 'unconfigured' };
@@ -122,6 +135,7 @@ export async function registerPushToken(
  * getExpoPushTokenAsync only asks the OS when permission is already granted.
  */
 export async function inspectPushToken(): Promise<PushRegistrationResult> {
+  if (Platform.OS === 'web') return { status: 'web' };
   if (isExpoGo) return { status: 'expo-go' };
   if (!Device.isDevice) return { status: 'simulator' };
   if (!env.easProjectId) return { status: 'unconfigured' };
@@ -155,6 +169,7 @@ export const pushStatusMessage: Record<PushRegistrationResult['status'], string>
   denied: 'Benachrichtigungen sind in den Systemeinstellungen deaktiviert.',
   simulator: 'Push funktioniert nur auf einem echten Gerät.',
   'expo-go': 'Push funktioniert nicht in Expo Go — dafür wird ein Development Build gebraucht.',
+  web: 'Im Browser und in der Home-Bildschirm-App gibt es keine Erinnerungen — dafür wird die native App gebraucht.',
   unconfigured: 'EXPO_PUBLIC_EAS_PROJECT_ID fehlt in der .env.',
   error: 'Registrierung fehlgeschlagen.',
 };

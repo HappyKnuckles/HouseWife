@@ -21,20 +21,9 @@ export const env = {
   /** Optional: push notifications are simply disabled without it. */
   easProjectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID,
 
-  /**
-   * The two fixed household members — which two depends on which env-profile
-   * is active (npm run env:dev / env:prod, see .env.example), provisioned
-   * once via supabase/scripts/create-users.mjs. There is no sign-up screen —
-   * the sign-in screen is just a "who are you" picker between these two.
-   */
-  userA: {
-    name: process.env.EXPO_PUBLIC_USER_A_NAME || 'Ich',
-    email: required('EXPO_PUBLIC_USER_A_EMAIL', process.env.EXPO_PUBLIC_USER_A_EMAIL),
-    password: required('EXPO_PUBLIC_USER_A_PASSWORD', process.env.EXPO_PUBLIC_USER_A_PASSWORD),
-  },
-  userB: {
-    name: process.env.EXPO_PUBLIC_USER_B_NAME || 'Partner:in',
-    email: required('EXPO_PUBLIC_USER_B_EMAIL', process.env.EXPO_PUBLIC_USER_B_EMAIL),
-    password: required('EXPO_PUBLIC_USER_B_PASSWORD', process.env.EXPO_PUBLIC_USER_B_PASSWORD),
-  },
+  // The two household members — names, addresses and passwords alike — live in
+  // `credentials.ts`, which exists in a native and a web variant. They cannot
+  // be read here: `EXPO_PUBLIC_*` is inlined into whatever bundle references
+  // it, so anything this file touches ends up in the web build, and the web
+  // build is a public URL.
 };
