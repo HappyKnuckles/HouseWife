@@ -180,6 +180,18 @@ function ThemedRoot() {
    */
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.background);
+
+    // On web that call sets document.body, which is only half the surface. The
+    // installed PWA paints the band behind the iPhone's status bar from
+    // `theme-color`, and <html> is what shows before React has painted
+    // anything — the boot script in public/index.html sets both from the
+    // stored preference, but only this knows the palette actually in use.
+    if (Platform.OS === 'web') {
+      document.documentElement.style.backgroundColor = colors.background;
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute('content', colors.background);
+    }
   }, [colors.background]);
 
   return (

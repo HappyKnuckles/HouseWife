@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!--
+      viewport-fit=cover is what makes env(safe-area-inset-*) report real
+      numbers instead of zero, which is what react-native-safe-area-context
+      reads on web — so <Screen edges={['top']} /> and the tab bar's
+      insets.bottom keep working once iOS hands the app the whole screen.
+
+      user-scalable=no only takes effect in the installed app (Safari has
+      ignored it in the browser since iOS 10). There it stops a double-tap or a
+      focused input from zooming the whole UI, which the native build cannot do
+      either. Drop it if pinch-zoom matters more than that.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>%WEB_TITLE%</title>
+
+    <!--
+      Home-screen install. apple-mobile-web-app-capable is the tag that makes
+      "Zum Home-Bildschirm" produce a standalone window with no Safari chrome;
+      iOS 17.4+ also honours the manifest's display:standalone, but older
+      versions only read this.
+    -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- The name under the icon. Without it iOS uses the <title>. -->
+    <meta name="apple-mobile-web-app-title" content="HouseWife" />
+    <!-- "default" leaves the status bar as its own band that iOS paints from
+         theme-color and picks legible text for. black-translucent would look
+         more native but forces one text colour, and this app has both a light
+         and a dark palette. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Kept in sync with the active palette at runtime by _layout.tsx. -->
+    <meta name="theme-color" content="#F5F6F8" />
+
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+
+      /* App-like touch behaviour: no grey flash on tap, no rubber-band on the
+         document itself (inner ScrollViews still bounce, as on native), and no
+         font inflation when iOS decides a column is too narrow. */
+      body {
+        -webkit-tap-highlight-color: transparent;
+        -webkit-text-size-adjust: 100%;
+        overscroll-behavior: none;
+      }
+
+      /* The colour behind everything until React paints — src/lib/theme.ts's
+         `background` for each palette. Without it a dark-mode cold start
+         flashes white. The values are duplicated here because this file is
+         plain HTML that loads before any bundle; if the palette changes, the
+         two constants in the script below change with it. */
+      html {
+        background-color: #f5f6f8;
+      }
+      @media (prefers-color-scheme: dark) {
+        html {
+          background-color: #0b0f16;
+        }
+      }
+    </style>
+
+    <script>
+      // Two jobs, both before first paint.
+      //
+      // 1. The media query above only knows what the OS thinks. Someone who
+      //    picked "Hell"/"Dunkel" explicitly in Einstellungen has that in
+      //    localStorage (AsyncStorage is localStorage on web, same key), so
+      //    read it and win over the OS — otherwise every cold start flashes
+      //    the wrong background before the app catches up.
+      // 2. Set theme-color to match, which is the band iOS paints behind the
+      //    status bar in the installed app.
+      (function () {
+        var LIGHT = '#F5F6F8';
+        var DARK = '#0B0F16';
+
+        var stored = null;
+        // Private mode and blocked storage both throw rather than return null.
+        try {
+          stored = window.localStorage.getItem('haushalt.theme-preference');
+        } catch (e) {}
+
+        var dark =
+          stored === 'dark' ||
+          (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var color = dark ? DARK : LIGHT;
+
+        document.documentElement.style.backgroundColor = color;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', color);
+      })();
+
+      // Registered after load so it never competes with the first render for
+      // bandwidth. Failure is not worth reporting: the app works without it,
+      // it just does not start offline.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+      }
+    </script>
+  </head>
+
+  <body>
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    <noscript> You need to enable JavaScript to run this app. </noscript>
+    <!-- The root element for your Expo app. -->
+    <div id="root"></div>
+  </body>
+</html>

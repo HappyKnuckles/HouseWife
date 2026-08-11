@@ -113,15 +113,28 @@ export default function SettingsScreen() {
     void inspectPushToken().then(setPush);
   }, []);
 
+
   const canInvite = (members?.length ?? 0) < (household?.max_members ?? 2);
 
   async function invite() {
     try {
       const code = await createInvite.mutateAsync();
       setInviteCode(code);
-      await Share.share({
-        message: `Tritt unserem Haushalt bei! Code: ${code}`,
-      });
+
+      // The share sheet is a convenience; the code is on screen either way, so
+      // its failure is not the invite's failure. It needs its own catch on web
+      // in particular: navigator.share only runs on a fresh user gesture, and
+      // the await above has already spent the one from the button — Safari
+      // rejects it, and reporting "Fehlgeschlagen" over a code that was
+      // created perfectly well sends people looking for a problem that is not
+      // there.
+      try {
+        await Share.share({
+          message: `Tritt unserem Haushalt bei! Code: ${code}`,
+        });
+      } catch {
+        // Nothing to say: the code is already rendered above.
+      }
     } catch (err) {
       Alert.alert('Fehlgeschlagen', errorMessage(err));
     }

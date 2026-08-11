@@ -30,7 +30,12 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "output": "single",
+      "lang": "de",
+      "name": "HouseWife",
+      "shortName": "HouseWife",
+      "description": "Putzplan, To-dos, Einkaufsliste, Inventar, Ausgaben und Termine für einen gemeinsamen Haushalt."
     },
     "plugins": [
       "expo-router",

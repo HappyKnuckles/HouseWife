@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import type {
   ExpenseCategoryMonthRow,
@@ -281,6 +282,23 @@ export async function deleteRecurringExpense(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * The picked image as bytes, whatever kind of URI the picker handed back.
+ *
+ * expo-file-system is a stub on web — every method warns and returns nothing,
+ * so `new File(uri).bytes()` throws rather than reading anything. There it does
+ * not need to exist anyway: expo-image-picker returns a blob:/data: URI, and
+ * fetch() reads both without touching a filesystem.
+ */
+async function readImageBytes(uri: string): Promise<Uint8Array> {
+  if (Platform.OS === 'web') {
+    const response = await fetch(uri);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  return new File(uri).bytes();
+}
+
+/**
  * Uploads a receipt image and records its metadata.
  *
  * The path layout `{household_id}/{expense_id}/{uuid}.{ext}` is load-bearing:
@@ -300,8 +318,7 @@ export async function uploadReceipt(params: {
   const extension = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
   const path = `${params.householdId}/${params.expenseId}/${Crypto.randomUUID()}.${extension}`;
 
-  const file = new File(params.uri);
-  const bytes = await file.bytes();
+  const bytes = await readImageBytes(params.uri);
 
   const { error: uploadError } = await supabase.storage
     .from('receipts')

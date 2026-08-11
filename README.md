@@ -392,6 +392,150 @@ curl -X POST "https://<ref>.supabase.co/functions/v1/household-tick?force=true" 
 
 ---
 
+## On the iPhone without the App Store
+
+The same code runs on the web, and iOS will install a website as a home-screen app
+with its own icon, its own window and no Safari chrome around it. That is the cheapest
+way onto a phone: no Apple Developer account, no TestFlight, no review, and pushing a
+fix is a `git push`.
+
+### What you give up
+
+Only one thing this app actually uses: **push reminders**. The Putzplan tick still runs
+and still writes its rows, but an installed web app on iOS gets no Expo push token, so
+nothing arrives on the phone. Einstellungen says so rather than showing a failure.
+
+Everything else works, including the parts that sound like they would not:
+
+| | In the installed web app |
+| --- | --- |
+| Barcode + Orts-QR scannen | Yes — `expo-camera` falls back to the `barcode-detector` polyfill, which is what Safari needs |
+| Beleg fotografieren / aus Fotos wählen | Yes — the iOS photo sheet, via `expo-image-picker` |
+| Einladungscode teilen | Yes — the iOS share sheet, via `navigator.share` |
+| Realtime, Login, alle Listen | Yes — plain Supabase over HTTPS/WebSocket |
+| Offline öffnen | The app starts; anything needing data waits for the connection |
+| Putzplan-Erinnerungen | **No** — native build only |
+
+### Two builds, two front doors
+
+The phone app and the web app do not ask for the same proof, on purpose.
+
+**Native (.ipa/.apk)** keeps what it always had: the two accounts are compiled in, and
+picking your card signs you straight in. No typing. The binary is installed on two
+phones and there is nobody else to keep out.
+
+**Web** is a public URL, so it ships with **nothing about the accounts in it** and asks
+for an address and a password like any other login. No picker either — a picker would
+name both addresses to anyone who loaded the page, which hands over half of every guess
+and reduces the whole thing to finding one password for a username it had just supplied.
+
+The mechanism is `src/lib/credentials.ts`, which exists in a native and a `.web.ts`
+variant. Metro inlines every `process.env.EXPO_PUBLIC_*` a bundle *references*, and it
+does that per module rather than per code path — a `Platform.OS === 'web'` guard would
+not have helped, because the string still has to be present for the branch that never
+runs. The web variant names no account, so the web build has none to leak.
+
+That is worth re-checking after touching either file, and it is one command:
+
+```bash
+npx expo export --platform web
+grep -c "haushalt.local" dist/_expo/static/js/web/entry-*.js
+```
+
+Expect `0`. If it is not zero, the web build is resolving the native module and both
+addresses are public.
+
+### The password is the whole lock
+
+On the phone this was never true — the app let you in and the phone's own lock screen
+was the security. On the web it is exactly true: the URL is public, the address is a
+plausible guess, and the password is the only thing left.
+
+So the passwords the seed script set are no longer an internal detail. Change them to
+real ones (`env-profiles/prod.env`, then `npm run seed:users`, or straight from the
+Supabase dashboard), and leave **new sign-ups turned off** in Supabase → Authentication
+so the two accounts stay the only two that exist.
+
+Nothing else is needed: there is no OAuth provider to register, no redirect URLs to
+allowlist, and no linking step. Signing in on the web with Nico's address *is* signing
+in as Nico — same `auth.users` row, same `profiles.id`, same household.
+
+
+### Deploy it
+
+EAS Hosting, which the project is already set up for. HTTPS is not optional: iOS only
+offers "Zum Home-Bildschirm" for a secure origin, and the camera will not open without
+one either.
+
+```bash
+npx eas env:exec production "npx expo export --platform web"   # build with EAS's env
+npx eas deploy                                                 # preview URL
+npx eas deploy --prod                                          # housewife.expo.app
+```
+
+Export first, every time — `eas deploy` uploads `dist/` as it finds it and will happily
+ship the previous build. A plain `eas deploy` gives a throwaway
+`housewife--<hash>.expo.app` to test on the phone before promoting.
+
+`web.output` is `"single"`, and EAS Hosting serves `index.html` for unmatched paths on
+its own, so `/einkaufsliste` opened directly works with no rewrite config.
+
+Environment variables live in EAS (`npx eas env:list --environment production`), which is
+what `env:exec` reads. `src/lib/env.ts` throws on the first one it cannot find, and
+because that happens while the bundle is still initialising, a missing variable is a
+**blank page**, not an error screen:
+
+```
+EXPO_PUBLIC_SUPABASE_URL
+EXPO_PUBLIC_SUPABASE_ANON_KEY
+EXPO_PUBLIC_USER_A_EMAIL
+EXPO_PUBLIC_USER_B_EMAIL
+
+EXPO_PUBLIC_USER_A_NAME           # optional — the sign-in cards, default "Ich"
+EXPO_PUBLIC_USER_B_NAME           # optional — default "Partner:in"
+EXPO_PUBLIC_EAS_PROJECT_ID        # optional — push only, so unused on web
+EXPO_PUBLIC_USER_A_PASSWORD       # native builds only; the web build never reads it
+EXPO_PUBLIC_USER_B_PASSWORD
+```
+
+`HOUSEHOLD_NAME` belongs to `create-users.mjs`, which runs on your machine off
+`.env`/`.env.local` and never ships.
+
+To look at a build before anyone else does:
+
+```bash
+npm run build:web     # switches to the prod env profile, then exports to dist/
+npx serve dist -s     # -s is the same index.html fallback EAS Hosting does
+```
+
+### Install it
+
+On the iPhone, in **Safari** — Chrome and Firefox on iOS cannot do this:
+
+1. Open the deployed URL.
+2. Share button → **Zum Home-Bildschirm**.
+3. Name it and confirm.
+
+It opens standalone from then on. Two things worth knowing: iOS gives a home-screen app
+its own storage separate from Safari's, so the first launch asks you to sign in again
+even if you were signed in in the browser; and iOS drops that storage after a few weeks
+of the app never being opened, which signs you out but loses nothing — the data is in
+Supabase.
+
+Signing in stays inside the app, which is the quiet advantage of a password over an SSO
+redirect here: nothing ever navigates to another origin, so iOS never has to leave the
+standalone window and find its way back — the step that behaves differently on every
+iOS version and is the usual reason a PWA login feels broken.
+
+### Changing the icon
+
+`assets/icon.png` is the source for the native builds *and*, through
+`npm run icons:pwa`, for everything in `public/icons` plus `public/apple-touch-icon.png`.
+Those are committed, so the deploy does not depend on the generator — run it after
+replacing the source and commit what it writes. It is still the stock Expo icon.
+
+---
+
 ## How it fits together
 
 ### The household is the tenant boundary
@@ -915,6 +1059,8 @@ that need to feel instant (ticking a chore, checking a to-do) are optimistic loc
 | `npm run env:dev` / `env:prod` | Switch env profile only, without starting Metro |
 | `npm run seed:users` | Create the active profile's two accounts + their household |
 | `npm run android` / `ios` | Launch on a device/emulator |
+| `npm run build:web` | Switch to the **real** users, then export the static web build to `dist/` |
+| `npm run icons:pwa` | Regenerate `public/icons/*` and `public/apple-touch-icon.png` from `assets/icon.png` |
 | `npm run test:db` | Apply all migrations to a real Postgres and test the logic |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run gen:types` | Regenerate `src/lib/database.types.ts` from your linked project |

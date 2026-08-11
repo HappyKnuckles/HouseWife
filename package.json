@@ -50,6 +50,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "build:web": "node scripts/switch-env.mjs prod && expo export --platform web",
+    "icons:pwa": "node scripts/gen-pwa-icons.mjs",
     "test:db": "node supabase/tests/schema.test.mjs",
     "env:dev": "node scripts/switch-env.mjs dev",
     "env:prod": "node scripts/switch-env.mjs prod",
