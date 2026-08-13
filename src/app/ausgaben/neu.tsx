@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { Button } from '../../components/Button';
 import { LoadingState, Screen } from '../../components/Screen';
@@ -13,7 +12,7 @@ import {
   type ExpenseFormValues,
 } from '../../features/expenses/components/ExpenseForm';
 import { useCreateExpense, useUploadReceipt } from '../../features/expenses/hooks';
-import { requestOcr } from '../../features/expenses/ocr';
+import { pickReceipt, type PickedReceipt, type ReceiptSource } from '../../features/expenses/pick-receipt';
 import { useMembers } from '../../features/household/hooks';
 import { useLinkShoppingRows } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
@@ -57,37 +56,45 @@ export default function NewExpenseScreen() {
     field: { gap: spacing.sm },
     flex: { flex: 1 },
     label: { ...typography.captionStrong, color: c.textMuted },
+    hint: { ...typography.caption, color: c.textFaint },
     receiptButtons: { flexDirection: 'row' as const, gap: spacing.md },
-    receiptPreview: { gap: spacing.sm },
-    receiptImage: { width: '100%' as const, height: 200, borderRadius: radius.md, backgroundColor: c.surfaceMuted },
+    receiptStrip: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
+    receiptThumb: {
+      width: 96,
+      height: 124,
+      borderRadius: radius.md,
+      backgroundColor: c.surfaceMuted,
+      overflow: 'hidden' as const,
+    },
+    receiptImage: { width: '100%' as const, height: '100%' as const },
+    thumbRemove: {
+      position: 'absolute' as const,
+      top: 4,
+      right: 4,
+      width: 26,
+      height: 26,
+      borderRadius: radius.pill,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+    },
   }));
   const { data: members, isLoading } = useMembers();
   const createExpense = useCreateExpense();
   const uploadReceipt = useUploadReceipt();
   const linkRows = useLinkShoppingRows();
 
-  const [receiptUri, setReceiptUri] = useState<string | null>(null);
+  // Held locally until the expense exists: the storage path contains the
+  // expense id, so there is nothing to upload to yet. More than one, because a
+  // big shop comes off the printer as two or three separate strips.
+  const [receipts, setReceipts] = useState<PickedReceipt[]>([]);
   const [saving, setSaving] = useState(false);
 
   if (isLoading) return <LoadingState />;
 
-  async function pickImage(from: 'camera' | 'library') {
-    const permission =
-      from === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (!permission.granted) {
-      Alert.alert('Keine Berechtigung', 'Bitte erlaube den Zugriff in den Einstellungen.');
-      return;
-    }
-
-    const result =
-      from === 'camera'
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.6 })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.6 });
-
-    if (!result.canceled && result.assets[0]) setReceiptUri(result.assets[0].uri);
+  async function addReceipt(from: ReceiptSource) {
+    const picked = await pickReceipt(from);
+    if (picked) setReceipts((prev) => [...prev, picked]);
   }
 
   async function save(values: ExpenseFormValues) {
@@ -95,12 +102,11 @@ export default function NewExpenseScreen() {
     try {
       const expense = await createExpense.mutateAsync(values);
 
-      // The receipt can only be uploaded once the expense exists — its id is
-      // part of the storage path the RLS policy authorises on.
-      if (receiptUri) {
-        const receipt = await uploadReceipt.mutateAsync({ expenseId: expense.id, uri: receiptUri });
-        // OCR is best-effort and must never block saving.
-        void requestOcr(receipt.id).catch(() => undefined);
+      // The receipts can only be uploaded once the expense exists — its id is
+      // part of the storage path the RLS policy authorises on. Sequential, so
+      // a phone on shop wifi is not asked to push three photos at once.
+      for (const receipt of receipts) {
+        await uploadReceipt.mutateAsync({ expenseId: expense.id, ...receipt });
       }
 
       // Stamp the shop this expense paid for, so the Einkaufshistorie can show
@@ -154,30 +160,55 @@ export default function NewExpenseScreen() {
           onSubmit={(values) => void save(values)}
         >
           <View style={styles.field}>
-            <Text style={styles.label}>Beleg</Text>
-            {receiptUri ? (
-              <View style={styles.receiptPreview}>
-                <Image source={{ uri: receiptUri }} style={styles.receiptImage} contentFit="cover" />
-                <Button label="Entfernen" variant="ghost" onPress={() => setReceiptUri(null)} />
+            <Text style={styles.label}>Belege</Text>
+
+            {receipts.length > 0 ? (
+              <View style={styles.receiptStrip}>
+                {receipts.map((receipt) => (
+                  <View key={receipt.uri} style={styles.receiptThumb}>
+                    <Image
+                      source={{ uri: receipt.uri }}
+                      style={styles.receiptImage}
+                      contentFit="cover"
+                    />
+                    <Pressable
+                      onPress={() =>
+                        setReceipts((prev) => prev.filter((item) => item.uri !== receipt.uri))
+                      }
+                      hitSlop={6}
+                      style={styles.thumbRemove}
+                      accessibilityRole="button"
+                      accessibilityLabel="Beleg entfernen"
+                    >
+                      <Ionicons name="close" size={15} color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ))}
               </View>
-            ) : (
-              <View style={styles.receiptButtons}>
-                <Button
-                  label="Foto"
-                  variant="secondary"
-                  onPress={() => void pickImage('camera')}
-                  style={styles.flex}
-                  icon={<Ionicons name="camera" size={16} color={colors.text} />}
-                />
-                <Button
-                  label="Galerie"
-                  variant="secondary"
-                  onPress={() => void pickImage('library')}
-                  style={styles.flex}
-                  icon={<Ionicons name="images" size={16} color={colors.text} />}
-                />
-              </View>
-            )}
+            ) : null}
+
+            <View style={styles.receiptButtons}>
+              <Button
+                label={receipts.length > 0 ? 'Weiteres Foto' : 'Foto'}
+                variant="secondary"
+                onPress={() => void addReceipt('camera')}
+                style={styles.flex}
+                icon={<Ionicons name="camera" size={16} color={colors.text} />}
+              />
+              <Button
+                label="Galerie"
+                variant="secondary"
+                onPress={() => void addReceipt('library')}
+                style={styles.flex}
+                icon={<Ionicons name="images" size={16} color={colors.text} />}
+              />
+            </View>
+
+            {/* Said here rather than discovered later: the photo is the point,
+                not a shortcut to typing less — nothing reads it for you. */}
+            <Text style={styles.hint}>
+              Wird zur Ausgabe gespeichert, damit später nachvollziehbar bleibt, was gekauft wurde.
+            </Text>
           </View>
         </ExpenseForm>
       </ScrollView>

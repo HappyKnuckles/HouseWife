@@ -11,7 +11,7 @@ import { useMemberMap } from '../../features/household/hooks';
 import { useShoppingHistory, useShoppingSuggestions } from '../../features/todos/hooks';
 import type { TodoRow } from '../../lib/database.types';
 import { dateIso, formatDate, formatQuantity } from '../../lib/format';
-import { radius, spacing, typography } from '../../lib/theme';
+import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
 type Mode = 'trips' | 'items';
@@ -84,7 +84,6 @@ export default function ShoppingHistoryScreen() {
       gap: spacing.md,
       paddingVertical: spacing.sm,
     },
-    rowText: { flex: 1, gap: 2 },
     rowTitle: { ...typography.body, color: c.text, flex: 1 },
     rowCount: { color: c.textMuted },
     rowMeta: { ...typography.caption, color: c.textFaint },
@@ -95,6 +94,64 @@ export default function ShoppingHistoryScreen() {
       backgroundColor: c.dueTodaySoft,
     },
     dueLabel: { ...typography.micro, color: c.dueToday },
+
+    // --- "Was wir kaufen" -------------------------------------------------
+    // Its own set rather than the trip rows above: those live inside a card
+    // that supplies the padding and the separation, and reusing them here put
+    // bare unpadded lines straight onto the page background.
+    itemsIntro: {
+      ...typography.caption,
+      color: c.textMuted,
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.md,
+    },
+    itemCard: {
+      backgroundColor: c.surface,
+      borderRadius: radius.md,
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.lg,
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: spacing.md,
+      ...shadow.card,
+    },
+    // The initial, not an icon: every row would carry the same cart otherwise,
+    // and a wall of identical glyphs is decoration rather than information.
+    itemInitial: {
+      width: 38,
+      height: 38,
+      borderRadius: radius.pill,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+      backgroundColor: c.primarySoft,
+    },
+    itemInitialDue: { backgroundColor: c.dueTodaySoft },
+    itemInitialLabel: { ...typography.bodyStrong, color: c.primary },
+    itemInitialLabelDue: { color: c.dueToday },
+    itemBody: { flex: 1, gap: 4 },
+    itemName: { ...typography.bodyStrong, color: c.text },
+    itemMeta: { ...typography.caption, color: c.textFaint },
+    // How far through the usual gap this item is. A number of days means
+    // nothing without the rhythm it is measured against; a bar that is nearly
+    // full says "bald wieder" at a glance.
+    track: {
+      height: 4,
+      borderRadius: radius.pill,
+      backgroundColor: c.surfaceMuted,
+      overflow: 'hidden' as const,
+    },
+    trackFill: { height: 4, borderRadius: radius.pill, backgroundColor: c.primary },
+    trackFillDue: { backgroundColor: c.dueToday },
+    itemRight: { alignItems: 'flex-end' as const, gap: spacing.xs },
+    countPill: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 2,
+      borderRadius: radius.pill,
+      backgroundColor: c.surfaceMuted,
+    },
+    countLabel: { ...typography.micro, color: c.textMuted },
   }));
 
   const [mode, setMode] = useState<Mode>('trips');
@@ -305,34 +362,92 @@ export default function ShoppingHistoryScreen() {
           keyExtractor={(item) => item.item_key}
           contentContainerStyle={styles.list}
           renderSectionHeader={() => null}
+          ListHeaderComponent={
+            items.length > 0 ? (
+              <Text style={styles.itemsIntro}>
+                Sortiert nach dem, was ihr am häufigsten holt. Dieselbe Liste schlägt auf der
+                Einkaufsliste die Ein-Tipp-Chips vor.
+              </Text>
+            ) : null
+          }
           ListEmptyComponent={
             <EmptyState
               title="Noch keine Gewohnheiten"
               body="Nach ein paar Einkäufen steht hier, was ihr regelmäßig holt — und wann es wieder so weit ist."
             />
           }
-          renderItem={({ item }) => (
-            <View style={styles.row}>
-              <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>{item.name}</Text>
-                <Text style={styles.rowMeta}>
-                  {[
-                    item.times_bought > 0 ? `${item.times_bought}×` : null,
-                    item.avg_interval_days ? `ca. alle ${Math.round(item.avg_interval_days)} Tage` : null,
-                    item.days_since_bought !== null ? `zuletzt vor ${item.days_since_bought} T.` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </Text>
-              </View>
+          renderItem={({ item }) => {
+            const due = !!item.is_due;
 
-              {item.is_due ? (
-                <View style={styles.dueBadge}>
-                  <Text style={styles.dueLabel}>fällig</Text>
+            // How far into the usual gap this item is, 0–1. Only drawn where
+            // there is a rhythm to measure against: a thing bought once has a
+            // "days since" but no expectation to compare it to, and a bar at
+            // an arbitrary fill would be inventing one.
+            const rhythm =
+              item.avg_interval_days && item.avg_interval_days > 0 && item.days_since_bought !== null
+                ? Math.min(1, item.days_since_bought / item.avg_interval_days)
+                : null;
+
+            return (
+              <View style={styles.itemCard}>
+                <View style={[styles.itemInitial, due && styles.itemInitialDue]}>
+                  <Text style={[styles.itemInitialLabel, due && styles.itemInitialLabelDue]}>
+                    {item.name.trim().charAt(0).toUpperCase()}
+                  </Text>
                 </View>
-              ) : null}
-            </View>
-          )}
+
+                <View style={styles.itemBody}>
+                  <Text style={styles.itemName} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.itemMeta} numberOfLines={1}>
+                    {[
+                      item.avg_interval_days
+                        ? `ca. alle ${Math.round(item.avg_interval_days)} Tage`
+                        : 'noch kein Rhythmus',
+                      item.days_since_bought !== null
+                        ? `zuletzt vor ${item.days_since_bought} T.`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </Text>
+
+                  {rhythm !== null ? (
+                    <View style={styles.track}>
+                      <View
+                        style={[
+                          styles.trackFill,
+                          due && styles.trackFillDue,
+                          // Percentage width, so it lays out against whatever
+                          // the row happens to be on this screen.
+                          { width: `${Math.round(rhythm * 100)}%` },
+                        ]}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.itemRight}>
+                  {/* The count is what the sort is on, so it belongs on the
+                      row — otherwise the order looks arbitrary. */}
+                  <View style={styles.countPill}>
+                    {/* An item can be known only from receipt lines and never
+                        from a ticked-off row, so times_bought is 0 for it —
+                        the price side is then the only count there is. */}
+                    <Text style={styles.countLabel}>
+                      {item.times_bought || item.times_paid}×
+                    </Text>
+                  </View>
+                  {due ? (
+                    <View style={styles.dueBadge}>
+                      <Text style={styles.dueLabel}>fällig</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            );
+          }}
         />
       )}
     </Screen>

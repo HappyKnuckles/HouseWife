@@ -38,7 +38,6 @@ type Stamps = 'id' | 'created_at' | 'updated_at';
 export type SplitType = 'equal' | 'shares' | 'items';
 export type ExpenseStatus = 'open' | 'settled';
 export type SettlementMethod = 'cash' | 'transfer' | 'paypal' | 'other';
-export type OcrStatus = 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
 export type RecurrenceUnit = 'day' | 'week' | 'month';
 /** Fixed costs repeat monthly or weekly; a daily rent makes no sense. */
 export type RecurringExpenseUnit = 'week' | 'month';
@@ -135,7 +134,7 @@ export type ExpenseItemRow = {
   unit_price_cents: number | null;
   total_cents: number;
   paid_for: string | null;
-  source: 'manual' | 'ocr';
+  source: 'manual';
   created_at: string;
   updated_at: string;
 }
@@ -160,12 +159,6 @@ export type ReceiptRow = {
   width: number | null;
   height: number | null;
   uploaded_by: string | null;
-  ocr_status: OcrStatus;
-  ocr_provider: string | null;
-  ocr_raw: Json | null;
-  ocr_parsed: Json | null;
-  ocr_error: string | null;
-  ocr_completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -611,7 +604,7 @@ export type ExpenseItemInput = {
   /** null / omitted = shared line, split equally. */
   paid_for?: string | null;
   position?: number;
-  source?: 'manual' | 'ocr';
+  source?: 'manual';
 }
 
 export type ExpenseShareInput = {
@@ -628,7 +621,7 @@ export type Database = {
       expenses: Table<ExpenseRow, Stamps | 'currency' | 'purchased_at' | 'split_type' | 'status'>;
       expense_items: Table<ExpenseItemRow, Stamps | 'position' | 'quantity' | 'source'>;
       expense_shares: Table<ExpenseShareRow, 'id' | 'created_at'>;
-      receipts: Table<ReceiptRow, Stamps | 'mime_type' | 'ocr_status'>;
+      receipts: Table<ReceiptRow, Stamps | 'mime_type'>;
       settlements: Table<SettlementRow, 'id' | 'created_at' | 'currency' | 'method' | 'settled_at'>;
       settlement_expenses: Table<SettlementExpenseRow>;
       recurring_expenses: Table<

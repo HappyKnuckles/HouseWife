@@ -57,8 +57,7 @@
     "typecheck": "tsc --noEmit",
     "gen:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
     "update:preview": "eas update --channel preview --environment preview",
-    "update:production": "eas update --channel production --environment production",
-    "test:receipt": "node --experimental-strip-types supabase/tests/receipt-parse.test.mjs"
+    "update:production": "eas update --channel production --environment production"
   },
   "private": true
 }

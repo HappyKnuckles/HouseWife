@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 
 import { Avatar, Badge } from '../../components/Avatar';
@@ -8,12 +8,13 @@ import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { ErrorState, LoadingState, Screen } from '../../components/Screen';
 import { categoryMeta } from '../../features/expenses/categories';
-import { useDeleteExpense, useExpense, useSignedReceiptUrl } from '../../features/expenses/hooks';
-import { ocrStatusLabel, parseReceiptPayload } from '../../features/expenses/ocr';
+import { ReceiptAttachments } from '../../features/expenses/components/ReceiptAttachments';
+import { ReceiptViewer } from '../../features/expenses/components/ReceiptViewer';
+import { useDeleteExpense, useExpense } from '../../features/expenses/hooks';
 import { useMemberMap } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
 import { formatCents, formatDate } from '../../lib/format';
-import { radius, spacing, typography } from '../../lib/theme';
+import { spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
 export default function ExpenseDetailScreen() {
@@ -52,31 +53,20 @@ export default function ExpenseDetailScreen() {
     itemMeta: { ...typography.caption, color: c.textFaint },
     itemAmount: { ...typography.bodyStrong, color: c.text },
     receiptCard: { gap: spacing.md },
-    receiptImage: { width: '100%' as const, height: 320, borderRadius: radius.md, backgroundColor: c.surfaceMuted },
-    receiptPlaceholder: {
-      width: '100%' as const,
-      height: 160,
-      borderRadius: radius.md,
-      backgroundColor: c.surfaceMuted,
-      alignItems: 'center' as const,
-      justifyContent: 'center' as const,
-    },
-    ocrStatus: { ...typography.caption, color: c.textMuted },
   }));
   const members = useMemberMap();
 
   const { data: expense, isLoading, error } = useExpense(id);
   const deleteExpense = useDeleteExpense();
 
-  const receipt = expense?.receipts[0] ?? null;
-  const { data: receiptUrl } = useSignedReceiptUrl(receipt?.storage_path);
+  /** The signed URL currently open full-screen; null = the viewer is closed. */
+  const [viewing, setViewing] = useState<string | null>(null);
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState error={error} />;
   if (!expense) return <ErrorState error={new Error('Ausgabe nicht gefunden')} />;
 
   const payer = members[expense.paid_by];
-  const parsed = receipt ? parseReceiptPayload(receipt.ocr_parsed) : null;
 
   function confirmDelete() {
     Alert.alert('Ausgabe löschen?', 'Das lässt sich nicht rückgängig machen.', [
@@ -158,7 +148,6 @@ export default function ExpenseDetailScreen() {
                           <Text style={styles.itemName}>{item.name}</Text>
                           <Text style={styles.itemMeta}>
                             {assignee ? `nur ${assignee.display_name}` : 'geteilt'}
-                            {item.source === 'ocr' ? ' · automatisch erkannt' : ''}
                           </Text>
                         </View>
                         <Text style={styles.itemAmount}>
@@ -172,24 +161,20 @@ export default function ExpenseDetailScreen() {
           </>
         ) : null}
 
-        {receipt ? (
-          <>
-            <Text style={styles.sectionTitle}>Beleg</Text>
-            <Card style={styles.receiptCard}>
-              {receiptUrl ? (
-                <Image source={{ uri: receiptUrl }} style={styles.receiptImage} contentFit="contain" />
-              ) : (
-                <View style={styles.receiptPlaceholder}>
-                  <Ionicons name="receipt-outline" size={28} color={colors.textFaint} />
-                </View>
-              )}
-              <Text style={styles.ocrStatus}>
-                {ocrStatusLabel(receipt)}
-                {parsed && parsed.lines.length > 0 ? ` · ${parsed.lines.length} Zeilen erkannt` : ''}
-              </Text>
-            </Card>
-          </>
-        ) : null}
+        {/*
+          Always shown, receipt or not — this is where one gets attached
+          afterwards. A shop gets typed in at the till and the bon is still in
+          the bag; without this the only chance to photograph it was the one
+          screen you already left.
+        */}
+        <Text style={styles.sectionTitle}>Belege</Text>
+        <Card style={styles.receiptCard}>
+          <ReceiptAttachments
+            expenseId={id}
+            receipts={expense.receipts}
+            onOpen={setViewing}
+          />
+        </Card>
 
         {/*
           Only while open: update_expense() refuses a settled one, because the
@@ -206,6 +191,8 @@ export default function ExpenseDetailScreen() {
 
         <Button label="Ausgabe löschen" variant="ghost" onPress={confirmDelete} />
       </ScrollView>
+
+      <ReceiptViewer uri={viewing} onClose={() => setViewing(null)} />
     </Screen>
   );
 }

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Updates from 'expo-updates';
 import { useEffect, useState } from 'react';
-import { ScrollView, Share, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, Share, Switch, Text, View } from 'react-native';
 
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
@@ -27,7 +27,7 @@ import {
   registerPushToken,
   type PushRegistrationResult,
 } from '../../lib/notifications';
-import { radius, spacing, typography } from '../../lib/theme';
+import { ACCENTS, ACCENT_KEYS, radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles, type ThemePreference } from '../../lib/theme-context';
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
@@ -38,7 +38,7 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 
 export default function SettingsScreen() {
   const { profile, householdId, signOut } = useAuth();
-  const { colors, preference, setPreference } = useAppTheme();
+  const { colors, scheme, preference, setPreference, accent, setAccent } = useAppTheme();
   const styles = useThemedStyles((c) => ({
     content: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl * 2 },
     sectionTitle: {
@@ -71,6 +71,30 @@ export default function SettingsScreen() {
     divider: { height: 1, backgroundColor: c.border },
     field: { gap: spacing.sm },
     chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
+    swatchRow: {
+      flexDirection: 'row' as const,
+      flexWrap: 'wrap' as const,
+      gap: spacing.sm,
+      paddingTop: spacing.xs,
+    },
+    // The ring is drawn on the outside and always present — a border that only
+    // appears on the selected swatch would nudge every other one by 2px.
+    swatchRing: {
+      width: 42,
+      height: 42,
+      borderRadius: radius.pill,
+      borderWidth: 2,
+      borderColor: 'transparent',
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    swatch: {
+      width: 32,
+      height: 32,
+      borderRadius: radius.pill,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
   }));
   const { data: household } = useHousehold();
   const { data: members } = useMembers();
@@ -200,6 +224,42 @@ export default function SettingsScreen() {
           <Text style={styles.rowHint}>
             Gilt nur für dieses Gerät — dein Partner kann unabhängig davon hell oder dunkel wählen.
           </Text>
+
+          <View style={styles.divider} />
+
+          <View style={styles.field}>
+            <Text style={styles.rowTitle}>Akzentfarbe</Text>
+            <Text style={styles.rowHint}>
+              Färbt Buttons, den aktiven Tab und Hinweise. Rot für überfällig und Grün für erledigt
+              bleiben, wie sie sind — die bedeuten etwas.
+            </Text>
+            <View style={styles.swatchRow}>
+              {ACCENT_KEYS.map((key) => {
+                const active = accent === key;
+                // The variant for the scheme actually on screen, so the swatch
+                // shows the color you are about to get rather than its
+                // light-mode cousin.
+                const swatch = ACCENTS[key][scheme].primary;
+
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => setAccent(key)}
+                    style={[styles.swatchRing, active && { borderColor: swatch }]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={ACCENTS[key].label}
+                  >
+                    <View style={[styles.swatch, { backgroundColor: swatch }]}>
+                      {active ? (
+                        <Ionicons name="checkmark" size={18} color={colors.textInverse} />
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
         </Card>
 
         <Text style={styles.sectionTitle}>Haushalt</Text>

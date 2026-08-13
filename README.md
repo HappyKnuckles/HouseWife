@@ -27,11 +27,10 @@ no manual refresh, no custom server.
 
 ```
 supabase/
-  migrations/        30 ordered SQL files — the whole schema, RLS, views, RPCs
+  migrations/        31 ordered SQL files — the whole schema, RLS, views, RPCs
   functions/
     household-tick/  hourly cron: fixed costs + restock + cleaning reminders + keep-alive
     lookup-barcode/  barcode → product, pluggable providers (stub by default)
-    ocr-receipt/     receipt OCR interface + no-op provider
   cron/schedule.sql  one-time pg_cron setup
   tests/             schema behaviour tests against a real Postgres
 src/
@@ -129,13 +128,12 @@ npx supabase secrets set CRON_SECRET="$(openssl rand -hex 32)"
 
 npx supabase functions deploy household-tick --no-verify-jwt
 npx supabase functions deploy lookup-barcode
-npx supabase functions deploy ocr-receipt
 ```
 
 `household-tick` is deployed with `--no-verify-jwt` because a cron job cannot present
 a user JWT; it authorises on the `x-cron-secret` header instead and refuses to run
-without one. The other two keep JWT verification and additionally resolve the calling
-user. `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected
+without one. `lookup-barcode` keeps JWT verification and additionally resolves the
+calling user. `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected
 automatically — never set them yourself.
 
 Barcode lookups hit [Open Food Facts](https://world.openfoodfacts.org) and
@@ -147,33 +145,6 @@ fall through to manual entry. Override or disable with:
 ```bash
 npx supabase secrets set BARCODE_PROVIDERS=openfoodfacts   # food only
 npx supabase secrets set BARCODE_PROVIDERS=null             # no lookups at all
-```
-
-**Receipt OCR** ships with two providers: `noop` (the default — attaches the
-photo, reads nothing) and `google-vision`. To turn the real one on, in the same
-Google Cloud project Firebase created for you:
-
-1. **APIs & Services → Library → Cloud Vision API → Enable.** The free tier is
-   1,000 units/month, which is far more receipts than a household photographs.
-2. **Credentials → Create credentials → API key.** Then restrict it, because an
-   unrestricted key is the one thing here worth being careful about:
-   *API restrictions → Restrict key → Cloud Vision API*. Leave **Application
-   restrictions** as *None* — the call comes from a Supabase Edge Function, not
-   from an app or a fixed IP.
-3. Hand it to Supabase:
-
-```bash
-npx supabase secrets set OCR_PROVIDER=google-vision
-npx supabase secrets set GOOGLE_VISION_API_KEY=AIza…
-```
-
-Note this is a *different* key from the one in `google-services.json`: that one
-is restricted to your Android app and would be rejected here. Vision only reads
-the paper — turning its text into line items is `parse-receipt.ts`, which is
-where the accuracy actually lives and is tested on its own (`npm run test:receipt`).
-
-```bash
-npx supabase secrets set OCR_PROVIDER=noop                 # back to attach-only
 ```
 
 ### 6. Schedule the reminder / keep-alive job
@@ -932,10 +903,6 @@ that need to feel instant (ticking a chore, checking a to-do) are optimistic loc
   is a smaller catalog and misses fall through to manual entry. Both providers share
   one request builder since they run on the same platform (Product Opener) and return
   identical JSON; adding another source is one more object in `PROVIDERS`.
-- **Receipt OCR** — `ocr-receipt` does the whole round-trip (sign a URL, run a provider,
-  write `ocr_parsed`, set status) with a no-op provider. Nothing in the expense flow
-  depends on it succeeding. Adding a real one means writing one object that satisfies
-  `ReceiptOcrProvider`; the app already renders parsed lines as editable items.
 
 ---
 
@@ -949,7 +916,6 @@ that need to feel instant (ticking a chore, checking a to-do) are optimistic loc
 | `npm run seed:users` | Create the active profile's two accounts + their household |
 | `npm run android` / `ios` | Launch on a device/emulator |
 | `npm run test:db` | Apply all migrations to a real Postgres and test the logic |
-| `npm run test:receipt` | Parse fixture receipts — the OCR text-to-line-items logic |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run gen:types` | Regenerate `src/lib/database.types.ts` from your linked project |
 

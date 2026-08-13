@@ -14,6 +14,69 @@
  */
 import type { AgendaStatus } from './database.types';
 
+/**
+ * Accent colors — the one part of the palette the user gets to choose.
+ *
+ * Only `primary`/`primarySoft` are swappable, and deliberately so: those are
+ * the app's "this is tappable" language (buttons, the active tab, links, the
+ * invite code box), which is a matter of taste. Everything else is not.
+ * Überfällig stays red and erledigt stays green no matter what, because those
+ * carry meaning rather than decoration — an accent that could recolor them
+ * would let the user turn "overdue" into a soothing mint.
+ *
+ * Each accent names its own dark variant instead of deriving one: the same hex
+ * that reads well on #F5F6F8 goes muddy on #0B0F16, which is exactly why
+ * darkColors.primary is already a step brighter than the light one.
+ */
+export const ACCENTS = {
+  blau: {
+    label: 'Blau',
+    light: { primary: '#2563EB', primarySoft: '#DBEAFE' },
+    dark: { primary: '#3B82F6', primarySoft: '#152A4D' },
+  },
+  gruen: {
+    label: 'Grün',
+    light: { primary: '#059669', primarySoft: '#D1FAE5' },
+    dark: { primary: '#34D399', primarySoft: '#0C2E26' },
+  },
+  tuerkis: {
+    label: 'Türkis',
+    light: { primary: '#0891B2', primarySoft: '#CFFAFE' },
+    dark: { primary: '#22D3EE', primarySoft: '#0B2E38' },
+  },
+  violett: {
+    label: 'Violett',
+    light: { primary: '#7C3AED', primarySoft: '#EDE9FE' },
+    dark: { primary: '#A78BFA', primarySoft: '#241B4D' },
+  },
+  pink: {
+    label: 'Pink',
+    light: { primary: '#DB2777', primarySoft: '#FCE7F3' },
+    dark: { primary: '#F472B6', primarySoft: '#3D1330' },
+  },
+  orange: {
+    label: 'Orange',
+    light: { primary: '#EA580C', primarySoft: '#FFEDD5' },
+    dark: { primary: '#FB923C', primarySoft: '#40230F' },
+  },
+  graphit: {
+    label: 'Graphit',
+    light: { primary: '#334155', primarySoft: '#E2E8F0' },
+    dark: { primary: '#94A3B8', primarySoft: '#232A36' },
+  },
+} as const;
+
+export type AccentKey = keyof typeof ACCENTS;
+
+export const ACCENT_KEYS = Object.keys(ACCENTS) as AccentKey[];
+
+/** What the app looked like before there was a choice, so nobody's app moves. */
+export const DEFAULT_ACCENT: AccentKey = 'blau';
+
+export function isAccentKey(value: unknown): value is AccentKey {
+  return typeof value === 'string' && value in ACCENTS;
+}
+
 export const lightColors = {
   background: '#F5F6F8',
   surface: '#FFFFFF',
@@ -30,8 +93,10 @@ export const lightColors = {
   border: '#E5E7EB',
   borderStrong: '#D1D5DB',
 
-  primary: '#2563EB',
-  primarySoft: '#DBEAFE',
+  // The default accent, spelled once. Choosing another one in Einstellungen
+  // overwrites exactly these two keys — see withAccent().
+  primary: ACCENTS[DEFAULT_ACCENT].light.primary,
+  primarySoft: ACCENTS[DEFAULT_ACCENT].light.primarySoft,
 
   // Putzplan status language — used for the left rail of every task card,
   // the section headers and the badges, so urgency reads at a glance.
@@ -68,8 +133,8 @@ export const darkColors: ThemeColors = {
 
   // One step brighter than the light palette's primary — the same hex reads
   // muddy at low lightness against a dark background.
-  primary: '#3B82F6',
-  primarySoft: '#152A4D',
+  primary: ACCENTS[DEFAULT_ACCENT].dark.primary,
+  primarySoft: ACCENTS[DEFAULT_ACCENT].dark.primarySoft,
 
   overdue: '#F87171',
   overdueSoft: '#3F1A1A',
@@ -94,6 +159,20 @@ export type ThemeColors = { [K in keyof typeof lightColors]: string };
 
 /** Back-compat / non-component call sites. Prefer useAppTheme() in screens. */
 export const colors = lightColors;
+
+/**
+ * The palette with the chosen accent painted over it.
+ *
+ * A new object every call rather than a mutation — theme-context memoizes on
+ * the result's identity, and a mutated palette would repaint nothing.
+ */
+export function withAccent(
+  base: ThemeColors,
+  accent: AccentKey,
+  scheme: 'light' | 'dark',
+): ThemeColors {
+  return { ...base, ...ACCENTS[accent][scheme] };
+}
 
 export const spacing = {
   xs: 4,

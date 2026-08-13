@@ -22,7 +22,27 @@ import { spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
 import { EXPENSE_CATEGORIES, categoryMeta } from '../categories';
 import { useUsedCategories } from '../hooks';
-import { computeSplit, validateSplit } from '../split';
+import {
+  centsFromPercent,
+  computeSplit,
+  percentFromCents,
+  validatePercent,
+  validateSplit,
+} from '../split';
+
+/** How an explicit split is typed. Both end up as cents; only entry differs. */
+type ShareMode = 'amount' | 'percent';
+
+/** "33,3", "33.3", "33,3 %" → 33.3. Anything unreadable is 0, not NaN. */
+function parsePercent(text: string): number {
+  const value = Number(text.replace(',', '.').replace(/[\s%]/g, ''));
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** Two decimals at most, and no trailing ",00" on a round number. */
+function formatPercent(value: number): string {
+  return String(Math.round(value * 100) / 100).replace('.', ',');
+}
 
 interface DraftItem {
   key: string;
@@ -177,10 +197,61 @@ export function ExpenseForm({
       ]),
     ),
   );
+  // Euro by default, including when reopening a saved expense: the stored
+  // shares are cents, and guessing that whoever typed them meant percentages
+  // would be putting words in their mouth. The toggle converts either way.
+  const [shareMode, setShareMode] = useState<ShareMode>('amount');
+  const [customPercents, setCustomPercents] = useState<Record<string, string>>({});
 
   const totalCents = parseAmountToCents(amount) ?? 0;
   const memberIds = useMemo(() => members.map((m) => m.id), [members]);
   const payer = paidBy ?? memberIds[0] ?? '';
+
+  const percentValues = useMemo(
+    () => Object.fromEntries(memberIds.map((id) => [id, parsePercent(customPercents[id] ?? '')])),
+    [memberIds, customPercents],
+  );
+
+  /**
+   * The cents this split actually comes to, whichever way it was typed. One
+   * value feeding the preview, the validation and the save, so the three can
+   * never disagree about what was entered.
+   */
+  const shareCents = useMemo<Record<string, number>>(() => {
+    if (shareMode === 'percent') {
+      return centsFromPercent(totalCents, percentValues, memberIds, payer);
+    }
+    return Object.fromEntries(
+      Object.entries(customShares).map(([id, value]) => [id, parseAmountToCents(value) ?? 0]),
+    );
+  }, [shareMode, percentValues, customShares, totalCents, memberIds, payer]);
+
+  /**
+   * Switching the unit carries the numbers across rather than clearing them —
+   * typing 60/40 and then wanting to see it in euro is a question, not a
+   * restart. Euro is derived from the percentages that are already on screen,
+   * so the conversion cannot drift from the preview it replaces.
+   */
+  function changeShareMode(next: ShareMode) {
+    if (next === shareMode) return;
+
+    if (next === 'percent') {
+      const percents = percentFromCents(totalCents, shareCents);
+      setCustomPercents(
+        Object.fromEntries(
+          memberIds.map((id) => [id, percents[id] ? formatPercent(percents[id]) : '']),
+        ),
+      );
+    } else {
+      setCustomShares(
+        Object.fromEntries(
+          memberIds.map((id) => [id, ((shareCents[id] ?? 0) / 100).toFixed(2).replace('.', ',')]),
+        ),
+      );
+    }
+
+    setShareMode(next);
+  }
 
   const itemInputs = useMemo<ExpenseItemInput[]>(
     () =>
@@ -203,14 +274,21 @@ export function ExpenseForm({
         payerId: payer,
         splitType,
         items: itemInputs,
-        customShares: Object.fromEntries(
-          Object.entries(customShares).map(([id, value]) => [id, parseAmountToCents(value) ?? 0]),
-        ),
+        customShares: shareCents,
       }),
-    [totalCents, memberIds, payer, splitType, itemInputs, customShares],
+    [totalCents, memberIds, payer, splitType, itemInputs, shareCents],
   );
 
-  const splitError = totalCents > 0 && splitType === 'shares' ? validateSplit(totalCents, shares) : null;
+  // In percent mode the percentage is the thing being checked, because it is
+  // the thing being typed — "das ergibt 90 %" points at the mistake, where
+  // "es fehlen 8,50 €" only points at its consequence. validateSplit stays as
+  // the backstop: it is what the RPC will enforce either way.
+  const splitError =
+    totalCents > 0 && splitType === 'shares'
+      ? shareMode === 'percent'
+        ? (validatePercent(percentValues, memberIds) ?? validateSplit(totalCents, shares))
+        : validateSplit(totalCents, shares)
+      : null;
   const purchasedIso = parseGermanDate(purchasedOn);
   const canSave =
     title.trim().length > 0 && totalCents > 0 && !!payer && !!purchasedIso && !splitError && !submitting;
@@ -338,16 +416,43 @@ export function ExpenseForm({
 
       {splitType === 'shares' ? (
         <View style={styles.field}>
-          {members.map((member) => (
-            <TextField
-              key={member.id}
-              label={member.display_name}
-              value={customShares[member.id] ?? ''}
-              onChangeText={(t) => setCustomShares((prev) => ({ ...prev, [member.id]: t }))}
-              placeholder="0,00"
-              keyboardType="decimal-pad"
-            />
-          ))}
+          {/* Two ways of saying the same thing. "Sie zahlt 30 €" and "sie
+              zahlt 40 %" are both normal ways to agree a split, and which one
+              is natural depends on the expense — a shared gift is a
+              percentage, a coffee someone owes you is a number. */}
+          <Segmented
+            options={[
+              { value: 'amount', label: 'Genauer Betrag' },
+              { value: 'percent', label: 'Prozent' },
+            ]}
+            value={shareMode}
+            onChange={changeShareMode}
+          />
+
+          {members.map((member) =>
+            shareMode === 'percent' ? (
+              <TextField
+                key={member.id}
+                label={member.display_name}
+                value={customPercents[member.id] ?? ''}
+                onChangeText={(t) => setCustomPercents((prev) => ({ ...prev, [member.id]: t }))}
+                placeholder="50"
+                keyboardType="decimal-pad"
+                // What the percentage comes to, live. Percent is the input,
+                // but euro is what actually gets owed.
+                hint={totalCents > 0 ? `= ${formatCents(shareCents[member.id] ?? 0)}` : undefined}
+              />
+            ) : (
+              <TextField
+                key={member.id}
+                label={member.display_name}
+                value={customShares[member.id] ?? ''}
+                onChangeText={(t) => setCustomShares((prev) => ({ ...prev, [member.id]: t }))}
+                placeholder="0,00"
+                keyboardType="decimal-pad"
+              />
+            ),
+          )}
           {splitError ? <Text style={styles.error}>{splitError}</Text> : null}
         </View>
       ) : null}

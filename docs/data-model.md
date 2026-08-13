@@ -143,7 +143,7 @@ All views are declared `with (security_invoker = true)` so RLS applies to the *c
 
 ### `expense_items` (optional itemization)
 `id`, `household_id`, `expense_id`, `position int`, `name`, `quantity numeric(10,3) default 1`, `unit_price_cents bigint`, `total_cents bigint not null`, `paid_for uuid references profiles(id)` — **null = shared item, split equally**; set = that person alone owes it. This is what drives `split_type = 'items'`.
-`source text default 'manual' check (source in ('manual','ocr'))` — so an OCR-parsed line is distinguishable from a hand-typed one.
+`source text default 'manual' check (source in ('manual'))` — provenance of the line, kept for when there is ever more than one way to create one.
 
 ### `expense_shares` — the single source of truth for balances
 `id`, `household_id`, `expense_id`, `profile_id`, `share_cents bigint not null check (share_cents >= 0)`, `share_ratio numeric(6,5)` (only meaningful for `split_type='shares'`, kept for display/editing).
@@ -163,8 +163,9 @@ create constraint trigger expense_shares_sum_check
 **Rounding rule** (in the shared TS function `computeShares()`): integer-divide, then distribute the remaining 1–2 cents deterministically, starting with the payer. 10.01 € split 50/50 → payer 501, other 500. Deterministic, reproducible, sums exactly.
 
 ### `receipts`
-`id`, `household_id`, `expense_id`, `storage_path text not null`, `mime_type`, `size_bytes`, `width`, `height`, `uploaded_by`, `created_at`, plus the OCR extension point:
-`ocr_status text not null default 'pending' check (ocr_status in ('pending','processing','done','failed','skipped'))`, `ocr_provider text`, `ocr_raw jsonb`, `ocr_parsed jsonb`, `ocr_error text`, `ocr_completed_at`.
+`id`, `household_id`, `expense_id`, `storage_path text not null`, `mime_type`, `size_bytes`, `width`, `height`, `uploaded_by`, `created_at`.
+
+An expense can carry several — a big shop prints two or three strips — and the app shows them as an album with a pinch-to-zoom viewer, which is the entire feature. Nothing parses them (migration 0031 dropped the OCR sidecar columns).
 
 Storage bucket `receipts` (private). **Path convention is load-bearing**: `{household_id}/{expense_id}/{uuid}.jpg`, because the storage policy authorizes on the first path segment:
 
@@ -175,20 +176,6 @@ create policy "receipts read own household" on storage.objects for select
     and (storage.foldername(name))[1]::uuid = public.current_household_id()
   );
 ```
-
-**OCR ships as an interface + stub, not a blocker:**
-```ts
-export interface ReceiptOcrProvider {
-  readonly name: string;
-  parse(input: { signedUrl: string; mimeType: string }): Promise<ParsedReceipt>;
-}
-export interface ParsedReceipt {
-  merchant?: string; purchasedAt?: string; totalCents?: number; currency?: string;
-  lines: Array<{ name: string; quantity?: number; unitPriceCents?: number; totalCents: number }>;
-  confidence: number; raw: unknown;
-}
-```
-Edge Function `ocr-receipt` implements the plumbing (fetch signed URL → provider → write `ocr_parsed` → set status) with a `NoopOcrProvider` that returns `{ lines: [], confidence: 0 }` and marks `skipped`. Dropping in Google Vision / Taggun / a local model later is one file.
 
 ### `settlements` + `settlement_expenses`
 `settlements`: `id`, `household_id`, `from_profile`, `to_profile`, `amount_cents`, `method text check (method in ('cash','transfer','paypal','other'))`, `note`, `settled_at`, `created_by`.
@@ -306,7 +293,7 @@ scan (expo-camera) → local products by barcode?  → yes: increment quantity, 
                                                            OpenFoodFacts/GS1 later)
                    → still nothing: manual entry sheet, prefilled with the barcode
 ```
-`lookup-barcode` has the same shape as the OCR provider: an array of `BarcodeProvider`s tried in order, first hit cached. Adding Open Food Facts later is ~30 lines and zero schema change.
+`lookup-barcode` is provider-pluggable: an array of `BarcodeProvider`s tried in order, first hit cached. Adding Open Food Facts later is ~30 lines and zero schema change.
 
 ### `inventory_items` (quantity on hand, per location)
 `id`, `household_id`, `product_id`, `location_id`, `quantity numeric(12,3) not null default 0`, `unit`, `min_quantity numeric` (low-stock threshold), `expires_on date`, `opened_at`, `note`, timestamps.
@@ -464,7 +451,6 @@ src/
 supabase/functions/
   household-tick/             # cron: reminders + keep-alive
   lookup-barcode/             # provider registry, stub
-  ocr-receipt/                # provider interface, noop stub
 ```
 
 ---

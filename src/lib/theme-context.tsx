@@ -9,12 +9,21 @@ import {
 } from 'react';
 import { StyleSheet, useColorScheme } from 'react-native';
 
-import { darkColors, lightColors, type ThemeColors } from './theme';
+import {
+  DEFAULT_ACCENT,
+  darkColors,
+  isAccentKey,
+  lightColors,
+  withAccent,
+  type AccentKey,
+  type ThemeColors,
+} from './theme';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 type ResolvedScheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'haushalt.theme-preference';
+const ACCENT_KEY = 'haushalt.theme-accent';
 
 interface ThemeContextValue {
   colors: ThemeColors;
@@ -23,6 +32,9 @@ interface ThemeContextValue {
   /** What the user asked for — 'system' means "follow the OS". */
   preference: ThemePreference;
   setPreference: (pref: ThemePreference) => void;
+  /** Which accent paints primary/primarySoft. */
+  accent: AccentKey;
+  setAccent: (accent: AccentKey) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -30,21 +42,32 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 /**
  * Device-local, not synced through the household. One member's dark mode
  * preference has no reason to flip the other's phone, so this lives in
- * AsyncStorage, not in profiles/households.
+ * AsyncStorage, not in profiles/households. The accent is the same kind of
+ * thing and lives beside it, under its own key so a stored theme choice is
+ * not rewritten every time a color is tapped.
  */
 export function AppThemeProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
   const [preference, setPreferenceState] = useState<ThemePreference>('system');
+  const [accent, setAccentState] = useState<AccentKey>(DEFAULT_ACCENT);
 
   // Starts as 'system' (the common case, and already correct on first paint
   // since it just follows systemScheme). If the user previously chose an
   // explicit override, this swaps to it as soon as the read completes — a
   // one-frame flash on cold start, not worth blocking the whole app on.
+  //
+  // multiGet rather than two reads: one round trip, and the theme and its
+  // accent land in the same commit instead of repainting twice.
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((stored) => {
-      if (stored === 'light' || stored === 'dark' || stored === 'system') {
-        setPreferenceState(stored);
-      }
+    AsyncStorage.multiGet([STORAGE_KEY, ACCENT_KEY]).then((entries) => {
+      const stored = Object.fromEntries(entries);
+
+      const pref = stored[STORAGE_KEY];
+      if (pref === 'light' || pref === 'dark' || pref === 'system') setPreferenceState(pref);
+
+      // An accent removed from ACCENTS in a later version fails isAccentKey()
+      // and falls back to the default rather than painting undefined.
+      if (isAccentKey(stored[ACCENT_KEY])) setAccentState(stored[ACCENT_KEY]);
     });
   }, []);
 
@@ -53,17 +76,24 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
     void AsyncStorage.setItem(STORAGE_KEY, pref);
   }
 
+  function setAccent(next: AccentKey) {
+    setAccentState(next);
+    void AsyncStorage.setItem(ACCENT_KEY, next);
+  }
+
   const scheme: ResolvedScheme =
     preference === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : preference;
 
   const value = useMemo<ThemeContextValue>(
     () => ({
-      colors: scheme === 'dark' ? darkColors : lightColors,
+      colors: withAccent(scheme === 'dark' ? darkColors : lightColors, accent, scheme),
       scheme,
       preference,
       setPreference,
+      accent,
+      setAccent,
     }),
-    [scheme, preference],
+    [scheme, preference, accent],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

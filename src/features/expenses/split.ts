@@ -48,6 +48,75 @@ function distribute(amountCents: number, members: string[]): SplitResult {
   return result;
 }
 
+/**
+ * Percentages → exact cents.
+ *
+ * Percent is an input convenience, not a second storage format: expense_shares
+ * holds cents either way, and apply_expense_split() derives share_ratio from
+ * them server-side, so "60 %" survives a round trip as 0.60000 without this
+ * side needing to send it. That is also what makes the mode switch lossless —
+ * percentFromCents() below reads the same number back out.
+ *
+ * The rounding is the existing rule, not a new one: floor everything, then
+ * hand the leftover cents out one at a time starting with the payer. 84,98 €
+ * at 33,33 / 66,67 comes to 28,32 and 56,66 and sums exactly.
+ *
+ * Only pure rounding drift is distributed. Percentages that do not add up to
+ * 100 produce a result that visibly does not reach the total, which is the
+ * honest preview — validatePercent() is what stops it being saved.
+ */
+export function centsFromPercent(
+  totalCents: number,
+  percentByMember: Record<string, number>,
+  memberIds: string[],
+  payerId: string,
+): SplitResult {
+  const ordered = orderMembers(memberIds, payerId);
+
+  const floors = ordered.map((id) =>
+    Math.floor((totalCents * (percentByMember[id] ?? 0)) / 100),
+  );
+  const remainder = totalCents - floors.reduce((sum, cents) => sum + cents, 0);
+
+  const result: SplitResult = {};
+  ordered.forEach((id, index) => {
+    result[id] = floors[index] + (index < remainder ? 1 : 0);
+  });
+
+  return result;
+}
+
+/** The inverse, for showing an already-saved split as percentages. */
+export function percentFromCents(
+  totalCents: number,
+  shares: SplitResult,
+): Record<string, number> {
+  if (totalCents <= 0) return {};
+  return Object.fromEntries(
+    Object.entries(shares).map(([id, cents]) => [id, (cents / totalCents) * 100]),
+  );
+}
+
+/**
+ * Guard for the save button in percent mode.
+ *
+ * Checked against 100 rather than against the cent total, because that is the
+ * mistake actually being made — "60 und 30" is a missing 10 %, and saying so
+ * is more useful than reporting the 8,50 € it happens to work out to. A tenth
+ * of a percent of slack, so 33,3 / 33,3 / 33,4 is not rejected for being
+ * exactly what someone meant.
+ */
+export function validatePercent(
+  percentByMember: Record<string, number>,
+  memberIds: string[],
+): string | null {
+  const sum = memberIds.reduce((total, id) => total + (percentByMember[id] ?? 0), 0);
+  if (Math.abs(sum - 100) < 0.1) return null;
+
+  const shown = Math.round(sum * 10) / 10;
+  return `Die Prozente ergeben ${String(shown).replace('.', ',')} % statt 100 %.`;
+}
+
 export function computeSplit(input: SplitInput): SplitResult {
   const { totalCents, memberIds, payerId, splitType, items = [], customShares } = input;
   const ordered = orderMembers(memberIds, payerId);

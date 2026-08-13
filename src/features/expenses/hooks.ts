@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { SettlementMethod } from '../../lib/database.types';
+import type { ReceiptRow, SettlementMethod } from '../../lib/database.types';
 import { useAuth, useHouseholdId } from '../auth/AuthProvider';
 import * as api from './api';
 
@@ -156,6 +156,16 @@ export function useUploadReceipt() {
   return useMutation({
     mutationFn: (params: { expenseId: string; uri: string; mimeType?: string; width?: number; height?: number }) =>
       api.uploadReceipt({ householdId, ...params }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+  });
+}
+
+/** Removes the stored image and its metadata row; the expense is untouched. */
+export function useDeleteReceipt() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (receipt: ReceiptRow) => api.deleteReceipt(receipt),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
   });
 }
