@@ -1,5 +1,6 @@
 import { Text, View } from 'react-native';
 
+import { readableTextOn } from '../lib/color';
 import { initials } from '../lib/format';
 import { radius, typography } from '../lib/theme';
 import { useAppTheme, useThemedStyles } from '../lib/theme-context';
@@ -28,13 +29,19 @@ export function Avatar({
   const { colors } = useAppTheme();
   const styles = useThemedStyles(() => ({
     avatar: { alignItems: 'center' as const, justifyContent: 'center' as const },
-    // Always white: the avatar's own background is a saturated per-person
-    // color regardless of theme, so the label never needs to invert.
-    label: { ...typography.captionStrong, color: '#FFFFFF' },
+    label: { ...typography.captionStrong },
   }));
 
   const label = name ? initials(name) : '–';
   const background = color ?? colors.surfaceMuted;
+
+  // Measured against the background rather than hard-coded white. It used to
+  // be white unconditionally, which was safe only for as long as every color
+  // arriving here was a saturated preset — a picker makes pale yellow
+  // reachable, and white initials on it are simply gone. It also fixes the
+  // case that was already broken: with no color at all the circle is
+  // surfaceMuted, a near-white, and the "–" placeholder was invisible on it.
+  const ink = readableTextOn(background);
 
   return (
     <View
@@ -45,7 +52,7 @@ export function Avatar({
         { width: size, height: size, borderRadius: radius.pill, backgroundColor: background },
       ]}
     >
-      <Text style={[styles.label, { fontSize: size * 0.38 }]}>{label}</Text>
+      <Text style={[styles.label, { fontSize: size * 0.38, color: ink }]}>{label}</Text>
     </View>
   );
 }

@@ -6,6 +6,7 @@ import { Pressable, ScrollView, Share, Switch, Text, View } from 'react-native';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { ColorPicker } from '../../components/ColorPicker';
 import { Chip, Segmented } from '../../components/Segmented';
 import { Screen, ScreenHeader } from '../../components/Screen';
 import { useAuth } from '../../features/auth/AuthProvider';
@@ -15,8 +16,10 @@ import {
   useLastHeartbeat,
   useMembers,
   useUpdateHousehold,
+  useUpdateProfile,
 } from '../../features/household/hooks';
 import { Alert } from '../../lib/alert';
+import { TOO_SIMILAR, colorDistance, readableTextOn } from '../../lib/color';
 import { errorMessage } from '../../lib/errors';
 import { formatDateTime, relativeTime } from '../../lib/format';
 import {
@@ -27,7 +30,7 @@ import {
   registerPushToken,
   type PushRegistrationResult,
 } from '../../lib/notifications';
-import { ACCENTS, ACCENT_KEYS, radius, spacing, typography } from '../../lib/theme';
+import { ACCENTS, ACCENT_KEYS, PROFILE_COLORS, radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles, type ThemePreference } from '../../lib/theme-context';
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
@@ -70,6 +73,8 @@ export default function SettingsScreen() {
     rowHint: { ...typography.caption, color: c.textMuted },
     divider: { height: 1, backgroundColor: c.border },
     field: { gap: spacing.sm },
+    link: { ...typography.captionStrong, color: c.primary },
+    warning: { ...typography.caption, color: c.warning },
     chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
     swatchRow: {
       flexDirection: 'row' as const,
@@ -101,8 +106,27 @@ export default function SettingsScreen() {
   const { data: heartbeat } = useLastHeartbeat();
   const createInvite = useCreateInvite();
   const updateHousehold = useUpdateHousehold();
+  const updateProfile = useUpdateProfile();
 
   const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  /**
+   * What the picker is currently showing, which is not yet what is saved.
+   *
+   * Null means "whatever the server says" — so this needs no effect to stay in
+   * sync, and a drag can update sixty times a second without writing any of
+   * them. Only a preset tap or the save button turns it into a mutation.
+   */
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const me = (members ?? []).find((member) => member.id === profile?.id);
+  const partner = (members ?? []).find((member) => member.id !== profile?.id);
+  const draftColor = draft ?? me?.color ?? PROFILE_COLORS[0];
+
+  const tooSimilar =
+    partner && colorDistance(draftColor, partner.color) < TOO_SIMILAR
+      ? partner.display_name
+      : null;
   /** null = still being read; see inspectPushToken(). */
   const [push, setPush] = useState<PushRegistrationResult | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
@@ -124,6 +148,27 @@ export default function SettingsScreen() {
       });
     } catch (err) {
       Alert.alert('Fehlgeschlagen', errorMessage(err));
+    }
+  }
+
+  /**
+   * Your color, stored on the profile rather than on the device.
+   *
+   * The opposite of the theme accent above, deliberately: the accent is how
+   * *you* like the app to look, so it stays on this phone, while this is how
+   * everyone identifies *you* — an avatar that meant a different person on
+   * each phone would be worse than having no color at all.
+   */
+  async function pickColor(color: string) {
+    // Shown before it is saved, and left showing afterwards: dropping back to
+    // the server value would flash the old color for as long as the refetch
+    // takes. Only a failure puts it back.
+    setDraft(color);
+    try {
+      await updateProfile.mutateAsync({ color });
+    } catch (err) {
+      setDraft(null);
+      Alert.alert('Farbe konnte nicht gespeichert werden', errorMessage(err));
     }
   }
 
@@ -264,15 +309,89 @@ export default function SettingsScreen() {
 
         <Text style={styles.sectionTitle}>Haushalt</Text>
         <Card style={styles.card}>
-          {(members ?? []).map((member) => (
-            <View key={member.id} style={styles.memberRow}>
-              <Avatar name={member.display_name} color={member.color} size={34} />
-              <View style={styles.memberText}>
-                <Text style={styles.memberName}>{member.display_name}</Text>
-                {member.id === profile?.id ? <Text style={styles.memberMeta}>Das bist du</Text> : null}
+          {(members ?? []).map((member) => {
+            const isMe = member.id === profile?.id;
+
+            return (
+              <View key={member.id} style={styles.field}>
+                <View style={styles.memberRow}>
+                  <Avatar name={member.display_name} color={member.color} size={34} />
+                  <View style={styles.memberText}>
+                    <Text style={styles.memberName}>{member.display_name}</Text>
+                    {isMe ? <Text style={styles.memberMeta}>Das bist du</Text> : null}
+                  </View>
+                </View>
+
+                {/* Only your own row. The column privileges say the same thing
+                    — profiles allows UPDATE on your id alone — so offering a
+                    swatch on your partner's row would be a button that fails. */}
+                {isMe ? (
+                  <>
+                    <View style={styles.swatchRow}>
+                      {PROFILE_COLORS.map((color) => {
+                        const active = draftColor.toLowerCase() === color.toLowerCase();
+
+                        return (
+                          <Pressable
+                            key={color}
+                            onPress={() => void pickColor(color)}
+                            style={[styles.swatchRing, active && { borderColor: color }]}
+                            accessibilityRole="radio"
+                            accessibilityState={{ selected: active }}
+                            accessibilityLabel={`Farbe ${color}`}
+                          >
+                            <View style={[styles.swatch, { backgroundColor: color }]}>
+                              {active ? (
+                                <Ionicons name="checkmark" size={18} color={readableTextOn(color)} />
+                              ) : null}
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {/* Behind a toggle: twelve taps covers the common case, and
+                        an always-open picker would make the settings screen
+                        mostly gradient. */}
+                    <Pressable
+                      onPress={() => setPickerOpen((open) => !open)}
+                      hitSlop={6}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.link}>
+                        {pickerOpen ? 'Farbwähler schließen' : 'Eigene Farbe wählen…'}
+                      </Text>
+                    </Pressable>
+
+                    {pickerOpen ? (
+                      <>
+                        <ColorPicker value={draftColor} onChange={setDraft} />
+
+                        {tooSimilar ? (
+                          <Text style={styles.warning}>
+                            Sehr nah an {tooSimilar} — auf einem 22-Pixel-Kreis sind die beiden
+                            kaum auseinanderzuhalten.
+                          </Text>
+                        ) : null}
+
+                        <Button
+                          label="Farbe speichern"
+                          onPress={() => void pickColor(draftColor)}
+                          loading={updateProfile.isPending}
+                          disabled={draftColor.toLowerCase() === member.color.toLowerCase()}
+                        />
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
               </View>
-            </View>
-          ))}
+            );
+          })}
+
+          <Text style={styles.rowHint}>
+            Deine Farbe steht für dich — auf dem Putzplan, in den Ausgaben und überall, wo ein
+            Kreis mit Initialen auftaucht. Sie gilt auf beiden Handys, anders als das Design oben.
+          </Text>
 
           {canInvite ? (
             <>

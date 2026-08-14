@@ -212,6 +212,41 @@ export const shadow = {
   },
 } as const;
 
+// ---------------------------------------------------------------------------
+// Person colors
+// ---------------------------------------------------------------------------
+
+/**
+ * What a person can pick as their color, in Einstellungen.
+ *
+ * Not tied to the accent, and not derived from anything: this is the one part
+ * of the palette that answers "who", not "what kind of thing", so it has to
+ * stay put when the accent changes. Your partner's avatar turning orange
+ * because you fancied an orange app would be the opposite of what the color is
+ * for.
+ *
+ * All mid-to-dark on purpose. <Avatar> always draws its initials in white —
+ * the circle is a saturated background in either theme — so a pastel here
+ * would be unreadable at 22pt on the Putzplan.
+ *
+ * None of these is the schema default (#4F8DF7), so "has this person ever
+ * chosen?" stays answerable.
+ */
+export const PROFILE_COLORS = [
+  '#E11D48',
+  '#EA580C',
+  '#D97706',
+  '#65A30D',
+  '#059669',
+  '#0D9488',
+  '#0891B2',
+  '#2563EB',
+  '#7C3AED',
+  '#C026D3',
+  '#DB2777',
+  '#475569',
+] as const;
+
 /** Derived from the active palette, so it repaints along with everything else. */
 export function getStatusColor(
   c: ThemeColors,
