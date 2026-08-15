@@ -113,6 +113,10 @@ export const lightColors = {
   successSoft: '#D1FAE5',
   danger: '#DC2626',
   warning: '#D97706',
+  // Amber rather than the dueToday orange: "liegt nicht an seinem Platz" and
+  // "muss nachgekauft werden" appear on the same screen, and two shades of the
+  // same orange would read as one urgency with two wordings.
+  warningSoft: '#FEF3C7',
 } as const;
 
 export const darkColors: ThemeColors = {
@@ -149,6 +153,7 @@ export const darkColors: ThemeColors = {
   successSoft: '#123027',
   danger: '#F87171',
   warning: '#FBBF24',
+  warningSoft: '#3A2E12',
 };
 
 // Widened to `string` per key rather than `typeof lightColors` directly: the

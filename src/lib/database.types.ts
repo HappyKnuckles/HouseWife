@@ -59,6 +59,14 @@ export type LocationKind =
   | 'other'
   | (string & {});
 export type ProductUnit = 'piece' | 'g' | 'kg' | 'ml' | 'l' | 'pack';
+/**
+ * Vorräte vs. Ausstattung — migration 0032.
+ *
+ * `consumable` is eaten or used up: quantity falls, a threshold can put it on
+ * the Einkaufsliste. `equipment` is owned: it has a fester Platz
+ * (`default_location_id`) instead of a threshold, and never goes low.
+ */
+export type ProductKind = 'consumable' | 'equipment';
 export type MovementReason = 'scan_in' | 'manual_adjust' | 'consume' | 'move' | 'correction' | 'initial';
 export type NotificationKind = 'due' | 'overdue' | 'digest' | 'restock' | 'event';
 /** 'restock' rows are written by generate_restock_todos(), not by a person. */
@@ -332,13 +340,18 @@ export type ProductRow = {
   unit: ProductUnit;
   net_quantity: number | null;
   image_url: string | null;
+  /**
+   * Where stock is put away by default. For `kind: 'equipment'` it doubles as
+   * the fester Platz the item is expected to be at — see migration 0032.
+   */
   default_location_id: string | null;
   notes: string | null;
+  kind: ProductKind;
   /**
    * Staple threshold. NULL = not tracked. Otherwise household-tick reminds
    * once a day while the total across all lots is at or below this. Lives on
    * the product rather than the lot because an emptied lot is deleted — see
-   * migration 0015.
+   * migration 0015. A CHECK constraint keeps this null for equipment.
    */
   restock_min_quantity: number | null;
   source: 'manual' | 'scan' | 'external';
@@ -588,9 +601,20 @@ export type InventoryTotalRow = {
   total_quantity: number;
   location_count: number;
   next_expiry: string | null;
-  /** True when restock_min_quantity is set and total_quantity has reached it. */
+  /**
+   * True when restock_min_quantity is set and total_quantity has reached it.
+   * Always false for equipment, which cannot run out.
+   */
   is_low: boolean | null;
   restock_min_quantity: number | null;
+  kind: ProductKind;
+  /** For equipment: the fester Platz `is_misplaced` is measured against. */
+  default_location_id: string | null;
+  /**
+   * Equipment that has a fester Platz and is currently sitting somewhere else.
+   * False when no place was ever agreed on — that is "unbekannt", not "wrong".
+   */
+  is_misplaced: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +677,7 @@ export type Database = {
       >;
       cleaning_completions: Table<CleaningCompletionRow, 'id' | 'created_at' | 'completed_at'>;
       storage_locations: Table<StorageLocationRow, Stamps | 'kind' | 'sort_order'>;
-      products: Table<ProductRow, Stamps | 'unit' | 'source'>;
+      products: Table<ProductRow, Stamps | 'unit' | 'source' | 'kind'>;
       product_lookup_cache: Table<ProductLookupCacheRow, 'found' | 'hit_count' | 'fetched_at'>;
       inventory_items: Table<InventoryItemRow, Stamps | 'quantity' | 'unit'>;
       inventory_movements: Table<InventoryMovementRow, 'id' | 'created_at'>;
@@ -744,6 +768,12 @@ export type Database = {
           p_image_url?: string | null;
           p_external_provider?: string | null;
           p_external_payload?: Json | null;
+          /**
+           * Only applies when the product is created; a known one keeps its
+           * kind. NULL is "no preference" — it also lets the name match reach
+           * across both kinds instead of only one.
+           */
+          p_kind?: ProductKind | null;
         };
         Returns: InventoryItemRow;
       };

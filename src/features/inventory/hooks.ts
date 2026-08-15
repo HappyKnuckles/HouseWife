@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { MovementReason } from '../../lib/database.types';
+import type { MovementReason, ProductKind } from '../../lib/database.types';
 import { useHouseholdId } from '../auth/AuthProvider';
 import * as api from './api';
 
@@ -162,6 +162,33 @@ export function useSetRestockThreshold() {
   return useMutation({
     mutationFn: ({ productId, threshold }: { productId: string; threshold: number | null }) =>
       api.setRestockThreshold(productId, threshold),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
+/**
+ * Vorrat ↔ Ausstattung.
+ *
+ * Only ['inventory'] is invalidated here even though switching to Ausstattung
+ * also deletes the product's "… kaufen" line: that delete happens in a trigger,
+ * and the realtime subscription on `todos` already invalidates ['todos'] for
+ * every device — including this one. Same reason useSetRestockThreshold does
+ * not touch it either.
+ */
+export function useSetProductKind() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ productId, kind }: { productId: string; kind: ProductKind }) =>
+      api.setProductKind(productId, kind),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
+export function useSetDefaultLocation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ productId, locationId }: { productId: string; locationId: string | null }) =>
+      api.setDefaultLocation(productId, locationId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 }

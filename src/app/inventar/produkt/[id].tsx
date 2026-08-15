@@ -6,7 +6,7 @@ import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 
 import { Button } from '../../../components/Button';
 import { Card } from '../../../components/Card';
-import { Chip } from '../../../components/Segmented';
+import { Chip, Segmented } from '../../../components/Segmented';
 import { ErrorState, LoadingState, Screen } from '../../../components/Screen';
 import { TextField } from '../../../components/TextField';
 import {
@@ -16,10 +16,13 @@ import {
   useLocations,
   useMoveItem,
   useProductCategories,
+  useSetDefaultLocation,
+  useSetProductKind,
   useSetQuantity,
   useSetRestockThreshold,
   useUpdateProduct,
 } from '../../../features/inventory/hooks';
+import type { ProductKind } from '../../../lib/database.types';
 import {
   formatDate,
   formatQuantity,
@@ -39,6 +42,11 @@ const THRESHOLD_CHOICES = [0, 0.25, 0.5, 1, 2, 3];
 
 /** How much of the opened pack is left. 0 = it is used up, the rest stay. */
 const OPEN_FRACTIONS = [0.75, 0.5, 0.25, 0];
+
+const KIND_OPTIONS: { value: ProductKind; label: string }[] = [
+  { value: 'consumable', label: 'Vorrat' },
+  { value: 'equipment', label: 'Ausstattung' },
+];
 
 /**
  * One product: where its stock sits, and whether it is a staple.
@@ -89,6 +97,8 @@ export default function ProductDetailScreen() {
     lotText: { flex: 1, gap: 2 },
     lotName: { ...typography.body, color: c.text },
     lotMeta: { ...typography.caption, color: c.textFaint },
+    lotWarning: { ...typography.caption, color: c.warning },
+    lotOk: { ...typography.caption, color: c.success },
     lotQuantity: { ...typography.bodyStrong, color: c.text },
     divider: { height: 1, backgroundColor: c.border },
     empty: { ...typography.caption, color: c.textMuted },
@@ -103,6 +113,8 @@ export default function ProductDetailScreen() {
   const { data: lots } = useItemsForProduct(id);
   const { data: locations } = useLocations();
   const setThreshold = useSetRestockThreshold();
+  const setKind = useSetProductKind();
+  const setDefaultLocation = useSetDefaultLocation();
   const updateProduct = useUpdateProduct();
   const moveItem = useMoveItem();
   const setQuantity = useSetQuantity();
@@ -116,6 +128,15 @@ export default function ProductDetailScreen() {
   const [pendingThreshold, setPendingThreshold] = useState<number | null>(null);
   const threshold = pendingThreshold ?? product?.restock_min_quantity ?? null;
   const tracked = threshold !== null;
+  /** Same optimistic trick for the Vorrat/Ausstattung switch. */
+  const [pendingKind, setPendingKind] = useState<ProductKind | null>(null);
+  const kind = pendingKind ?? product?.kind ?? 'consumable';
+  const equipment = kind === 'equipment';
+  /**
+   * The fester Platz, same trick again — but `null` is a real choice here
+   * ("noch keiner"), so `undefined` has to carry "no local override" instead.
+   */
+  const [pendingHome, setPendingHome] = useState<string | null | undefined>(undefined);
   /** Free-text threshold, for the ones no chip covers ("≤ 250 g"). */
   const [thresholdDraft, setThresholdDraft] = useState('');
 
@@ -133,6 +154,21 @@ export default function ProductDetailScreen() {
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState error={error} />;
   if (!product) return <ErrorState error={new Error('Produkt nicht gefunden')} />;
+
+  const home = pendingHome !== undefined ? pendingHome : product.default_location_id;
+  const homePath = home ? ((locations ?? []).find((l) => l.id === home)?.path ?? null) : null;
+  // Which lots are sitting somewhere other than the fester Platz. A set rather
+  // than a per-row expression only so the row below keeps a concise body — it
+  // asks the question four times.
+  //
+  // Keyed off homePath rather than home so nothing is flagged until the Orte
+  // have loaded: every label here names the place it belongs, and there is no
+  // honest wording for "somewhere I cannot name yet".
+  const misplacedLots = new Set(
+    equipment && homePath
+      ? (lots ?? []).filter((lot) => lot.location_id !== home).map((lot) => lot.id)
+      : [],
+  );
 
   // Only one panel is open at a time, so its drafts can live in a single piece
   // of state instead of one per row.
@@ -190,6 +226,23 @@ export default function ProductDetailScreen() {
     setPendingThreshold(next);
     setThresholdDraft('');
     void setThreshold.mutateAsync({ productId: id, threshold: next });
+  }
+
+  /**
+   * Switching to Ausstattung clears the threshold server-side — the CHECK
+   * constraint leaves it no choice. Dropping the local override here hands the
+   * display back to the refetched server value instead of leaving a stale "≤ 2"
+   * to reappear if they switch straight back.
+   */
+  function applyKind(next: ProductKind) {
+    setPendingKind(next);
+    if (next === 'equipment') setPendingThreshold(null);
+    void setKind.mutateAsync({ productId: id, kind: next });
+  }
+
+  function applyHome(locationId: string | null) {
+    setPendingHome(locationId);
+    void setDefaultLocation.mutateAsync({ productId: id, locationId });
   }
 
   function applyThresholdDraft() {
@@ -300,71 +353,113 @@ export default function ProductDetailScreen() {
           </View>
         ) : null}
 
-        <Text style={styles.sectionTitle}>Regelmäßiger Bedarf</Text>
+        <Text style={styles.sectionTitle}>Art</Text>
         <Card style={styles.card}>
-          <View style={styles.switchRow}>
-            <View style={styles.switchText}>
-              <Text style={styles.rowTitle}>Nachkauf-Erinnerung</Text>
-              <Text style={styles.rowHint}>
-                Landet automatisch auf der Einkaufsliste, sobald der Bestand die Grenze erreicht.
-              </Text>
-            </View>
-            <Switch
-              value={tracked}
-              onValueChange={(on) => applyThreshold(on ? 1 : null)}
-              trackColor={{ true: colors.primary }}
-            />
-          </View>
+          <Segmented options={KIND_OPTIONS} value={kind} onChange={applyKind} />
+          <Text style={styles.rowHint}>
+            {equipment
+              ? 'Wird besessen, nicht verbraucht: kein Nachkauf, kein MHD — dafür ein fester Platz, an den es gehört.'
+              : 'Wird aufgebraucht: Bestand zählt runter und kann automatisch auf der Einkaufsliste landen.'}
+          </Text>
+        </Card>
 
-          {tracked ? (
-            <>
-              <View style={styles.divider} />
-              <View style={styles.switchText}>
-                <Text style={styles.rowTitle}>Erinnern ab</Text>
-                <Text style={styles.rowHint}>
-                  {threshold === 0
-                    ? 'Erst wenn gar nichts mehr da ist.'
-                    : `Wenn ${formatQuantityWithUnit(threshold ?? 0, product.unit)} oder weniger übrig sind — eine angebrochene Packung zählt als Bruchteil.`}
-                </Text>
-              </View>
+        {equipment ? (
+          <>
+            <Text style={styles.sectionTitle}>Fester Platz</Text>
+            <Card style={styles.card}>
+              <Text style={styles.rowHint}>
+                {homePath
+                  ? `Gehört nach ${homePath}. Liegt es woanders, zeigt das Inventar es an.`
+                  : 'Noch kein Platz vereinbart. Ohne einen kann das Inventar nicht sagen, ob etwas verräumt wurde.'}
+              </Text>
               <View style={styles.chipRow}>
-                {THRESHOLD_CHOICES.map((choice) => (
+                <Chip
+                  label="Noch keiner"
+                  active={!home}
+                  onPress={() => applyHome(null)}
+                />
+                {(locations ?? []).map((location) => (
                   <Chip
-                    key={choice}
-                    label={choice === 0 ? 'Leer' : `≤ ${formatQuantity(choice)}`}
-                    active={threshold === choice}
-                    onPress={() => applyThreshold(choice)}
+                    key={location.id}
+                    label={location.path}
+                    active={home === location.id}
+                    onPress={() => applyHome(location.id)}
                   />
                 ))}
               </View>
-              <View style={styles.inline}>
-                <View style={styles.flex}>
-                  <TextField
-                    value={thresholdDraft}
-                    onChangeText={setThresholdDraft}
-                    placeholder={`Eigene Grenze in ${unitLabel(product.unit, 0)}`}
-                    keyboardType="decimal-pad"
-                    returnKeyType="done"
-                    onSubmitEditing={applyThresholdDraft}
-                  />
+            </Card>
+          </>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>Regelmäßiger Bedarf</Text>
+            <Card style={styles.card}>
+              <View style={styles.switchRow}>
+                <View style={styles.switchText}>
+                  <Text style={styles.rowTitle}>Nachkauf-Erinnerung</Text>
+                  <Text style={styles.rowHint}>
+                    Landet automatisch auf der Einkaufsliste, sobald der Bestand die Grenze
+                    erreicht.
+                  </Text>
                 </View>
-                <Button
-                  label="Setzen"
-                  variant="secondary"
-                  onPress={applyThresholdDraft}
-                  disabled={parseQuantity(thresholdDraft) === null}
+                <Switch
+                  value={tracked}
+                  onValueChange={(on) => applyThreshold(on ? 1 : null)}
+                  trackColor={{ true: colors.primary }}
                 />
               </View>
-            </>
-          ) : null}
-        </Card>
 
-        <Text style={styles.sectionTitle}>Bestand</Text>
+              {tracked ? (
+                <>
+                  <View style={styles.divider} />
+                  <View style={styles.switchText}>
+                    <Text style={styles.rowTitle}>Erinnern ab</Text>
+                    <Text style={styles.rowHint}>
+                      {threshold === 0
+                        ? 'Erst wenn gar nichts mehr da ist.'
+                        : `Wenn ${formatQuantityWithUnit(threshold ?? 0, product.unit)} oder weniger übrig sind — eine angebrochene Packung zählt als Bruchteil.`}
+                    </Text>
+                  </View>
+                  <View style={styles.chipRow}>
+                    {THRESHOLD_CHOICES.map((choice) => (
+                      <Chip
+                        key={choice}
+                        label={choice === 0 ? 'Leer' : `≤ ${formatQuantity(choice)}`}
+                        active={threshold === choice}
+                        onPress={() => applyThreshold(choice)}
+                      />
+                    ))}
+                  </View>
+                  <View style={styles.inline}>
+                    <View style={styles.flex}>
+                      <TextField
+                        value={thresholdDraft}
+                        onChangeText={setThresholdDraft}
+                        placeholder={`Eigene Grenze in ${unitLabel(product.unit, 0)}`}
+                        keyboardType="decimal-pad"
+                        returnKeyType="done"
+                        onSubmitEditing={applyThresholdDraft}
+                      />
+                    </View>
+                    <Button
+                      label="Setzen"
+                      variant="secondary"
+                      onPress={applyThresholdDraft}
+                      disabled={parseQuantity(thresholdDraft) === null}
+                    />
+                  </View>
+                </>
+              ) : null}
+            </Card>
+          </>
+        )}
+
+        <Text style={styles.sectionTitle}>{equipment ? 'Wo es liegt' : 'Bestand'}</Text>
         <Card style={styles.card}>
           {(lots ?? []).length === 0 ? (
             <Text style={styles.empty}>
-              Aktuell nichts auf Lager. Der Eintrag bleibt bestehen, damit Scannen und Tippen
-              weiterhin denselben Artikel treffen.
+              {equipment
+                ? 'Gerade nirgends verbucht. Der Eintrag bleibt bestehen, damit der feste Platz nicht verloren geht.'
+                : 'Aktuell nichts auf Lager. Der Eintrag bleibt bestehen, damit Scannen und Tippen weiterhin denselben Artikel treffen.'}
             </Text>
           ) : (
             (lots ?? []).map((lot, index) => (
@@ -374,12 +469,22 @@ export default function ProductDetailScreen() {
                   onPress={() => togglePanel(lot.id, lot.quantity)}
                   style={styles.lotRow}
                   accessibilityRole="button"
-                  accessibilityLabel="Menge und Ort ändern"
+                  accessibilityLabel={equipment ? 'Ort ändern' : 'Menge und Ort ändern'}
                 >
-                  <Ionicons name="location-outline" size={16} color={colors.textFaint} />
+                  <Ionicons
+                    name={misplacedLots.has(lot.id) ? 'alert-circle-outline' : 'location-outline'}
+                    size={16}
+                    color={misplacedLots.has(lot.id) ? colors.warning : colors.textFaint}
+                  />
                   <View style={styles.lotText}>
                     <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
-                    {lot.opened_at || lot.expires_on ? (
+                    {equipment ? (
+                      misplacedLots.has(lot.id) ? (
+                        <Text style={styles.lotWarning}>Gehört: {homePath}</Text>
+                      ) : home ? (
+                        <Text style={styles.lotOk}>Am Platz</Text>
+                      ) : null
+                    ) : lot.opened_at || lot.expires_on ? (
                       <Text style={styles.lotMeta}>
                         {[
                           lot.opened_at ? 'angebrochen' : null,
@@ -402,25 +507,41 @@ export default function ProductDetailScreen() {
 
                 {openPanel === lot.id ? (
                   <View style={styles.panel}>
-                    <Text style={styles.panelLabel}>Angebrochen</Text>
-                    <Text style={styles.rowHint}>
-                      Wie viel ist von der offenen {unitLabel(lot.unit)} noch übrig? Der Rest des
-                      Bestands bleibt, wie er ist.
-                    </Text>
-                    <View style={styles.chipRow}>
-                      {OPEN_FRACTIONS.map((fraction) => (
-                        <Chip
-                          key={fraction}
-                          label={fraction === 0 ? 'aufgebraucht' : `noch ${formatQuantity(fraction)}`}
-                          onPress={() => setOpenFraction(lot.id, lot.quantity, fraction)}
-                        />
-                      ))}
-                    </View>
+                    {misplacedLots.has(lot.id) ? (
+                      <Button
+                        label={`Zurück an den Platz: ${homePath}`}
+                        variant="secondary"
+                        onPress={() => submitMove(lot.id, home)}
+                        loading={moveItem.isPending}
+                      />
+                    ) : null}
+
+                    {/* A Bohrmaschine is not angebrochen. */}
+                    {equipment ? null : (
+                      <>
+                        <Text style={styles.panelLabel}>Angebrochen</Text>
+                        <Text style={styles.rowHint}>
+                          Wie viel ist von der offenen {unitLabel(lot.unit)} noch übrig? Der Rest des
+                          Bestands bleibt, wie er ist.
+                        </Text>
+                        <View style={styles.chipRow}>
+                          {OPEN_FRACTIONS.map((fraction) => (
+                            <Chip
+                              key={fraction}
+                              label={
+                                fraction === 0 ? 'aufgebraucht' : `noch ${formatQuantity(fraction)}`
+                              }
+                              onPress={() => setOpenFraction(lot.id, lot.quantity, fraction)}
+                            />
+                          ))}
+                        </View>
+                      </>
+                    )}
 
                     <View style={styles.inline}>
                       <View style={styles.flex}>
                         <TextField
-                          label="Genauer Bestand"
+                          label={equipment ? 'Genaue Anzahl' : 'Genauer Bestand'}
                           value={exactAmount}
                           onChangeText={setExactAmount}
                           keyboardType="decimal-pad"

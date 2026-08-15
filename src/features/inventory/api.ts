@@ -3,6 +3,7 @@ import type {
   InventoryTotalRow,
   LocationPathRow,
   MovementReason,
+  ProductKind,
   ProductRow,
   ProductUnit,
   StorageLocationRow,
@@ -28,9 +29,20 @@ export interface LookupResponse {
 }
 
 export interface InventoryItemWithRefs extends InventoryItemRow {
-  products: Pick<ProductRow, 'id' | 'name' | 'brand' | 'barcode' | 'image_url' | 'unit'> | null;
+  products: Pick<
+    ProductRow,
+    'id' | 'name' | 'brand' | 'barcode' | 'image_url' | 'unit' | 'kind' | 'default_location_id'
+  > | null;
   storage_locations: { id: string; name: string } | null;
 }
+
+/**
+ * The columns every lot query needs: `kind` splits Vorräte from Ausstattung,
+ * and `default_location_id` is what a lot's actual location gets compared
+ * against to decide whether a tool is at its fester Platz.
+ */
+const ITEM_SELECT =
+  '*, products(id, name, brand, barcode, image_url, unit, kind, default_location_id), storage_locations(id, name)';
 
 export async function fetchInventoryTotals(householdId: string): Promise<InventoryTotalRow[]> {
   const { data, error } = await supabase
@@ -46,7 +58,7 @@ export async function fetchInventoryTotals(householdId: string): Promise<Invento
 export async function fetchItems(householdId: string): Promise<InventoryItemWithRefs[]> {
   const { data, error } = await supabase
     .from('inventory_items')
-    .select('*, products(id, name, brand, barcode, image_url, unit), storage_locations(id, name)')
+    .select(ITEM_SELECT)
     .eq('household_id', householdId)
     .order('updated_at', { ascending: false });
 
@@ -57,7 +69,7 @@ export async function fetchItems(householdId: string): Promise<InventoryItemWith
 export async function fetchItemsForProduct(productId: string): Promise<InventoryItemWithRefs[]> {
   const { data, error } = await supabase
     .from('inventory_items')
-    .select('*, products(id, name, brand, barcode, image_url, unit), storage_locations(id, name)')
+    .select(ITEM_SELECT)
     .eq('product_id', productId);
 
   if (error) throw error;
@@ -298,6 +310,56 @@ export async function setRestockThreshold(
 }
 
 /**
+ * Moves a product between Vorräte and Ausstattung.
+ *
+ * The threshold is cleared in the same statement rather than in a second call:
+ * products_equipment_has_no_threshold rejects a tool that still carries one, so
+ * two updates would fail on the first. Clearing it also fires the restock
+ * trigger, which takes any open "… kaufen" to-do with it.
+ *
+ * Going the other way leaves the threshold null — "wieder ein Vorrat" does not
+ * imply "und erinnere mich daran", which is a separate switch on the same
+ * screen.
+ */
+export async function setProductKind(
+  productId: string,
+  kind: ProductKind,
+): Promise<ProductRow> {
+  const { data, error } = await supabase
+    .from('products')
+    .update(
+      kind === 'equipment' ? { kind, restock_min_quantity: null } : { kind },
+    )
+    .eq('id', productId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Sets the fester Platz — where equipment belongs, and where bought stock is
+ * put away when the Einkauf checkout is not told otherwise.
+ *
+ * One column for both readings on purpose; see migration 0032.
+ */
+export async function setDefaultLocation(
+  productId: string,
+  locationId: string | null,
+): Promise<ProductRow> {
+  const { data, error } = await supabase
+    .from('products')
+    .update({ default_location_id: locationId })
+    .eq('id', productId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
  * External lookup, step three of the scan flow.
  *
  * Ships pointed at a null provider that always misses, so scanning works
@@ -316,6 +378,13 @@ export async function lookupBarcode(barcode: string): Promise<LookupResponse> {
 /**
  * Adds stock. Finds or creates the catalog entry, adds to the right
  * product/location/expiry lot and writes the movement log — one transaction.
+ *
+ * `kind` only decides what a *newly created* product becomes. Scanning a tool
+ * back in resolves to the existing catalog entry and leaves its kind alone.
+ *
+ * Omitting it is meaningfully different from passing 'consumable': it also lets
+ * the name match reach across both kinds, which is what the Einkauf checkout
+ * wants when booking in a hand-written row it cannot classify.
  */
 export async function scanIn(input: {
   barcode?: string | null;
@@ -327,6 +396,7 @@ export async function scanIn(input: {
   brand?: string | null;
   imageUrl?: string | null;
   externalProvider?: string | null;
+  kind?: ProductKind;
 }): Promise<InventoryItemRow> {
   const { data, error } = await supabase.rpc('inventory_scan_in', {
     p_barcode: input.barcode ?? null,
@@ -338,6 +408,7 @@ export async function scanIn(input: {
     p_brand: input.brand ?? null,
     p_image_url: input.imageUrl ?? null,
     p_external_provider: input.externalProvider ?? null,
+    p_kind: input.kind ?? null,
   });
 
   if (error) throw error;
