@@ -121,7 +121,28 @@ export async function updateExpense(
   return data as ExpenseRow;
 }
 
+/**
+ * Deleting the expense row cascades to its items, shares and receipt
+ * *metadata* for free (see migration 0004) — but the receipt image files
+ * themselves live in Storage, which a Postgres FK cascade cannot reach. Only
+ * deleteReceipt() knew to remove those; a whole-expense delete silently left
+ * them behind. So this fetches the paths first and clears them the same way.
+ */
 export async function deleteExpense(expenseId: string): Promise<void> {
+  const { data: receipts, error: fetchError } = await supabase
+    .from('receipts')
+    .select('storage_path')
+    .eq('expense_id', expenseId);
+
+  if (fetchError) throw fetchError;
+
+  if (receipts && receipts.length > 0) {
+    const { error: storageError } = await supabase.storage
+      .from('receipts')
+      .remove(receipts.map((r) => r.storage_path));
+    if (storageError) throw storageError;
+  }
+
   const { error } = await supabase.from('expenses').delete().eq('id', expenseId);
   if (error) throw error;
 }

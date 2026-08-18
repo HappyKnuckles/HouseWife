@@ -8,8 +8,10 @@ import { EmptyState } from '../../components/Card';
 import { Segmented } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen } from '../../components/Screen';
 import { useMemberMap } from '../../features/household/hooks';
-import { useShoppingHistory, useShoppingSuggestions } from '../../features/todos/hooks';
+import { useDeleteTrip, useShoppingHistory, useShoppingSuggestions } from '../../features/todos/hooks';
+import { Alert } from '../../lib/alert';
 import type { TodoRow } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { dateIso, formatDate, formatQuantity } from '../../lib/format';
 import { radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -158,6 +160,7 @@ export default function ShoppingHistoryScreen() {
   const { data: history, isLoading, error } = useShoppingHistory();
   const { data: suggestions } = useShoppingSuggestions();
   const memberMap = useMemberMap();
+  const deleteTrip = useDeleteTrip();
 
   /**
    * Two levels: the day is the heading, and each checkout under it is its own
@@ -235,6 +238,36 @@ export default function ShoppingHistoryScreen() {
     router.push(`/ausgaben/neu?${query.toString()}`);
   }
 
+  /**
+   * "This trip should never have counted" — a real delete, not just clearing
+   * it off a list. Stock already put away during checkout is untouched (a
+   * separate table, separate act), and a booked expense stays too; either can
+   * be undone on its own screen. The dialog says so, because both look like
+   * they should disappear along with the trip and neither does.
+   */
+  function confirmDeleteTrip(trip: Trip) {
+    Alert.alert(
+      'Einkauf löschen?',
+      trip.expenseId
+        ? 'Verschwindet aus der Historie und den Kaufgewohnheiten. Bereits eingeräumter Bestand und die verknüpfte Ausgabe bleiben bestehen.'
+        : 'Verschwindet aus der Historie und den Kaufgewohnheiten. Bereits eingeräumter Bestand bleibt bestehen.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Löschen',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteTrip.mutateAsync(trip.rows.map((row) => row.id));
+            } catch (err) {
+              Alert.alert('Konnte nicht gelöscht werden', errorMessage(err));
+            }
+          },
+        },
+      ],
+    );
+  }
+
   const items = useMemo(
     () =>
       [...(suggestions ?? [])]
@@ -299,6 +332,15 @@ export default function ShoppingHistoryScreen() {
                     <Text style={styles.tripAction}>Ausgabe buchen</Text>
                   </Pressable>
                 )}
+
+                <Pressable
+                  onPress={() => confirmDeleteTrip(trip)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Diesen Einkauf löschen"
+                >
+                  <Ionicons name="trash-outline" size={16} color={colors.textFaint} />
+                </Pressable>
               </View>
 
               {trip.rows.map((row, index) => {
