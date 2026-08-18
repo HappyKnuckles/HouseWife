@@ -92,6 +92,7 @@ function RootNavigator() {
         headerShadowVisible: false,
         headerTintColor: colors.text,
         contentStyle: { backgroundColor: colors.background },
+        headerBackButtonDisplayMode: 'minimal',
       }}
     >
       <Stack.Protected guard={!signedIn}>
