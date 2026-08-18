@@ -279,6 +279,14 @@ export function useDeleteItem() {
   });
 }
 
+export function useDeleteProduct() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (productId: string) => api.deleteProduct(productId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+  });
+}
+
 export function useUpdateLocation() {
   const queryClient = useQueryClient();
   return useMutation({

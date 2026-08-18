@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
 
@@ -11,6 +11,7 @@ import { ErrorState, LoadingState, Screen } from '../../../components/Screen';
 import { TextField } from '../../../components/TextField';
 import {
   useAdjustQuantity,
+  useDeleteProduct,
   useInventoryTotals,
   useItemsForProduct,
   useLocations,
@@ -23,6 +24,8 @@ import {
   useUpdateProduct,
 } from '../../../features/inventory/hooks';
 import type { ProductKind } from '../../../lib/database.types';
+import { Alert } from '../../../lib/alert';
+import { errorMessage } from '../../../lib/errors';
 import {
   formatDate,
   formatQuantity,
@@ -57,6 +60,7 @@ const KIND_OPTIONS: { value: ProductKind; label: string }[] = [
  */
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { colors } = useAppTheme();
   const styles = useThemedStyles((c) => ({
     content: { padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xxl * 2 },
@@ -119,6 +123,7 @@ export default function ProductDetailScreen() {
   const moveItem = useMoveItem();
   const setQuantity = useSetQuantity();
   const adjust = useAdjustQuantity();
+  const deleteProduct = useDeleteProduct();
   const { data: categories } = useProductCategories();
 
   const product = useMemo(() => totals?.find((t) => t.product_id === id), [totals, id]);
@@ -269,6 +274,28 @@ export default function ProductDetailScreen() {
       },
     });
     setEditing(false);
+  }
+
+  function confirmDeleteProduct() {
+    Alert.alert(
+      `${product?.name} endgültig löschen?`,
+      'Der Bestand an allen Orten wird entfernt und der Katalogeintrag verschwindet aus dem Inventar. Das lässt sich nicht rückgängig machen.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Löschen',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteProduct.mutateAsync(id);
+              router.back();
+            } catch (err) {
+              Alert.alert('Konnte nicht gelöscht werden', errorMessage(err));
+            }
+          },
+        },
+      ],
+    );
   }
 
   return (
@@ -612,6 +639,13 @@ export default function ProductDetailScreen() {
             if (target) void adjust.mutateAsync({ itemId: target.id, delta: 1 });
           }}
           disabled={(lots ?? []).length === 0}
+        />
+
+        <Button
+          label="Produkt endgültig löschen"
+          variant="ghost"
+          onPress={confirmDeleteProduct}
+          loading={deleteProduct.isPending}
         />
       </ScrollView>
     </Screen>

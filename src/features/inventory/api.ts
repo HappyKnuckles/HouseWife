@@ -558,6 +558,22 @@ export async function deleteItem(itemId: string): Promise<void> {
 }
 
 /**
+ * Removes the catalog entry itself, not just a lot — every location this
+ * product sits at, gone in one step. inventory_items cascades with it;
+ * movement history and any restock notification log rows keep their trail but
+ * lose the product reference (ON DELETE SET NULL / CASCADE, see migration
+ * 0007 and 0015).
+ *
+ * Unlike zeroing a lot's quantity, which deliberately keeps the product so a
+ * future scan or search still finds it — this is for "we don't own this
+ * anymore and never will again".
+ */
+export async function deleteProduct(productId: string): Promise<void> {
+  const { error } = await supabase.from('products').delete().eq('id', productId);
+  if (error) throw error;
+}
+
+/**
  * Renames / re-types / re-parents a location.
  *
  * An RPC only for the cycle check: parent_id is a plain self-reference, so
