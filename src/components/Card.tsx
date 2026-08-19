@@ -10,6 +10,7 @@ import { Pressable } from 'react-native-gesture-handler';
 
 import { radius, shadow, spacing, typography } from '../lib/theme';
 import { useThemedStyles } from '../lib/theme-context';
+import { usePressDim } from '../lib/usePressDim';
 
 export function Card({
   children,
@@ -29,12 +30,18 @@ export function Card({
     },
     pressed: { opacity: 0.85 },
   }));
+  // Not Pressable's own `pressed` render-prop: that fires the instant a
+  // finger lands, including the first moment of a swipe drag if this Card
+  // sits inside a SwipeRow — see the comment on usePressDim.
+  const { pressed, onPressIn, onPressOut } = usePressDim();
 
   if (onPress) {
     return (
       <Pressable
         onPress={onPress}
-        style={({ pressed }) => [styles.card, pressed && styles.pressed, style]}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        style={[styles.card, pressed && styles.pressed, style]}
       >
         {children}
       </Pressable>

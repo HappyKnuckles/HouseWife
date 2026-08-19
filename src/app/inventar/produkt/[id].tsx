@@ -2,7 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ScrollView, Switch, Text, View } from 'react-native';
+import {
+  ScrollView,
+  Switch,
+  Text,
+  View,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 // Gesture-handler's Pressable, not React Native's — see the comment in
 // components/Card.tsx. The lot rows sit inside a SwipeRow.
 import { Pressable } from 'react-native-gesture-handler';
@@ -11,8 +19,9 @@ import { Button } from '../../../components/Button';
 import { Card } from '../../../components/Card';
 import { Chip, Segmented } from '../../../components/Segmented';
 import { ErrorState, LoadingState, Screen } from '../../../components/Screen';
-import { SwipeRow, useSwipeRowGroup } from '../../../components/SwipeRow';
+import { SwipeRow, useSwipeRowGroup, type SwipeRowGroup } from '../../../components/SwipeRow';
 import { TextField } from '../../../components/TextField';
+import type { InventoryItemWithRefs } from '../../../features/inventory/api';
 import {
   useAdjustQuantity,
   useDeleteItem,
@@ -40,6 +49,7 @@ import {
 } from '../../../lib/format';
 import { radius, spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
+import { usePressDim } from '../../../lib/usePressDim';
 
 /**
  * Thresholds worth one tap. The fractions are the point of the list: with whole
@@ -103,6 +113,7 @@ export default function ProductDetailScreen() {
       gap: spacing.md,
       paddingVertical: spacing.sm,
     },
+    lotRowPressed: { opacity: 0.7 },
     lotText: { flex: 1, gap: 2 },
     lotName: { ...typography.body, color: c.text },
     lotMeta: { ...typography.caption, color: c.textFaint },
@@ -534,60 +545,18 @@ export default function ProductDetailScreen() {
             (lots ?? []).map((lot, index) => (
               <View key={lot.id}>
                 {index > 0 ? <View style={styles.divider} /> : null}
-                <SwipeRow
-                  id={lot.id}
-                  group={lotSwipeGroup}
-                  rightActions={[
-                    {
-                      key: 'delete',
-                      icon: 'trash-outline',
-                      label: 'Entfernen',
-                      tone: 'danger',
-                      accessibilityLabel: `${lot.storage_locations?.name ?? 'Eintrag'} entfernen`,
-                      onPress: () => confirmDeleteLot(lot),
-                    },
-                  ]}
-                >
-                  <Pressable
-                    onPress={() => togglePanel(lot.id, lot.quantity)}
-                    style={styles.lotRow}
-                    accessibilityRole="button"
-                    accessibilityLabel={equipment ? 'Ort ändern' : 'Menge und Ort ändern'}
-                  >
-                    <Ionicons
-                      name={misplacedLots.has(lot.id) ? 'alert-circle-outline' : 'location-outline'}
-                      size={16}
-                      color={misplacedLots.has(lot.id) ? colors.warning : colors.textFaint}
-                    />
-                    <View style={styles.lotText}>
-                      <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
-                      {equipment ? (
-                        misplacedLots.has(lot.id) ? (
-                          <Text style={styles.lotWarning}>Gehört: {homePath}</Text>
-                        ) : home ? (
-                          <Text style={styles.lotOk}>Am Platz</Text>
-                        ) : null
-                      ) : lot.opened_at || lot.expires_on ? (
-                        <Text style={styles.lotMeta}>
-                          {[
-                            lot.opened_at ? 'angebrochen' : null,
-                            lot.expires_on ? `MHD ${formatDate(lot.expires_on)}` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={styles.lotQuantity}>
-                      {formatQuantityWithUnit(lot.quantity, lot.unit)}
-                    </Text>
-                    <Ionicons
-                      name={openPanel === lot.id ? 'chevron-up' : 'chevron-down'}
-                      size={16}
-                      color={colors.textFaint}
-                    />
-                  </Pressable>
-                </SwipeRow>
+                <LotRowHeader
+                  lot={lot}
+                  equipment={equipment}
+                  misplaced={misplacedLots.has(lot.id)}
+                  atHome={!!home}
+                  homePath={homePath}
+                  expanded={openPanel === lot.id}
+                  swipeGroup={lotSwipeGroup}
+                  styles={styles}
+                  onToggle={() => togglePanel(lot.id, lot.quantity)}
+                  onDelete={() => confirmDeleteLot(lot)}
+                />
 
                 {openPanel === lot.id ? (
                   <View style={styles.panel}>
@@ -706,5 +675,102 @@ export default function ProductDetailScreen() {
         />
       </ScrollView>
     </Screen>
+  );
+}
+
+interface LotRowStyles {
+  lotRow: StyleProp<ViewStyle>;
+  lotRowPressed: StyleProp<ViewStyle>;
+  lotText: StyleProp<ViewStyle>;
+  lotName: StyleProp<TextStyle>;
+  lotWarning: StyleProp<TextStyle>;
+  lotOk: StyleProp<TextStyle>;
+  lotMeta: StyleProp<TextStyle>;
+  lotQuantity: StyleProp<TextStyle>;
+}
+
+/**
+ * Its own component, not inline in the `.map()` above: the delayed
+ * press-dim below needs `usePressDim()`, which only gets its own slot of
+ * state when called from a real per-row component instance — see the same
+ * note on TodoRow in todos.tsx.
+ */
+function LotRowHeader({
+  lot,
+  equipment,
+  misplaced,
+  atHome,
+  homePath,
+  expanded,
+  swipeGroup,
+  styles,
+  onToggle,
+  onDelete,
+}: {
+  lot: InventoryItemWithRefs;
+  equipment: boolean;
+  misplaced: boolean;
+  atHome: boolean;
+  homePath: string | null;
+  expanded: boolean;
+  swipeGroup: SwipeRowGroup;
+  styles: LotRowStyles;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const { colors } = useAppTheme();
+  // Not Pressable's own `pressed` render-prop: this row sits inside a
+  // SwipeRow, and that fires the instant a finger lands — including the
+  // first moment of a swipe drag — see the comment on usePressDim.
+  const rowPress = usePressDim();
+
+  return (
+    <SwipeRow
+      id={lot.id}
+      group={swipeGroup}
+      rightActions={[
+        {
+          key: 'delete',
+          icon: 'trash-outline',
+          label: 'Entfernen',
+          tone: 'danger',
+          accessibilityLabel: `${lot.storage_locations?.name ?? 'Eintrag'} entfernen`,
+          onPress: onDelete,
+        },
+      ]}
+    >
+      <Pressable
+        onPress={onToggle}
+        onPressIn={rowPress.onPressIn}
+        onPressOut={rowPress.onPressOut}
+        style={[styles.lotRow, rowPress.pressed && styles.lotRowPressed]}
+        accessibilityRole="button"
+        accessibilityLabel={equipment ? 'Ort ändern' : 'Menge und Ort ändern'}
+      >
+        <Ionicons
+          name={misplaced ? 'alert-circle-outline' : 'location-outline'}
+          size={16}
+          color={misplaced ? colors.warning : colors.textFaint}
+        />
+        <View style={styles.lotText}>
+          <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
+          {equipment ? (
+            misplaced ? (
+              <Text style={styles.lotWarning}>Gehört: {homePath}</Text>
+            ) : atHome ? (
+              <Text style={styles.lotOk}>Am Platz</Text>
+            ) : null
+          ) : lot.opened_at || lot.expires_on ? (
+            <Text style={styles.lotMeta}>
+              {[lot.opened_at ? 'angebrochen' : null, lot.expires_on ? `MHD ${formatDate(lot.expires_on)}` : null]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={styles.lotQuantity}>{formatQuantityWithUnit(lot.quantity, lot.unit)}</Text>
+        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textFaint} />
+      </Pressable>
+    </SwipeRow>
   );
 }

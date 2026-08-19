@@ -11,6 +11,7 @@ import type { CleaningAgendaRow } from '../../../lib/database.types';
 import { dueLabel, recurrenceLabel } from '../../../lib/format';
 import { getStatusColor, radius, shadow, spacing, typography } from '../../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../../lib/theme-context';
+import { usePressDim } from '../../../lib/usePressDim';
 
 interface TaskCardProps {
   task: CleaningAgendaRow;
@@ -93,6 +94,11 @@ export function TaskCard({ task, onComplete, onPress, busy, onDelete, swipeGroup
     },
     checkBusy: { opacity: 0.4 },
   }));
+  // Not Pressable's own `pressed` render-prop: this card sits inside a
+  // SwipeRow, and that fires the instant a finger lands — including the
+  // first moment of a swipe drag — see the comment on usePressDim.
+  const mainPress = usePressDim();
+  const checkPress = usePressDim();
 
   return (
     <View style={styles.wrap}>
@@ -119,7 +125,9 @@ export function TaskCard({ task, onComplete, onPress, busy, onDelete, swipeGroup
           {/* LEFT / MAIN CARD PRESS TARGET */}
           <Pressable
             onPress={onPress}
-            style={({ pressed }) => [styles.mainPressable, pressed && styles.pressed]}
+            onPressIn={mainPress.onPressIn}
+            onPressOut={mainPress.onPressOut}
+            style={[styles.mainPressable, mainPress.pressed && styles.pressed]}
             accessibilityRole="button"
             accessibilityLabel={`${task.name}, ${dueLabel(task.days_until)}`}
           >
@@ -182,14 +190,16 @@ export function TaskCard({ task, onComplete, onPress, busy, onDelete, swipeGroup
                 void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 onComplete();
               }}
+              onPressIn={checkPress.onPressIn}
+              onPressOut={checkPress.onPressOut}
               disabled={busy}
               hitSlop={8}
               accessibilityRole="button"
               accessibilityLabel={`${task.name} als erledigt markieren`}
-              style={({ pressed }) => [
+              style={[
                 styles.checkButton,
                 { borderColor: status.fg },
-                pressed && { backgroundColor: status.bg },
+                checkPress.pressed && { backgroundColor: status.bg },
                 busy && styles.checkBusy,
               ]}
             >
