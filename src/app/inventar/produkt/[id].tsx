@@ -2,15 +2,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import { ScrollView, Switch, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. The lot rows sit inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Button } from '../../../components/Button';
 import { Card } from '../../../components/Card';
 import { Chip, Segmented } from '../../../components/Segmented';
 import { ErrorState, LoadingState, Screen } from '../../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../../components/SwipeRow';
 import { TextField } from '../../../components/TextField';
 import {
   useAdjustQuantity,
+  useDeleteItem,
   useDeleteProduct,
   useInventoryTotals,
   useItemsForProduct,
@@ -124,6 +129,8 @@ export default function ProductDetailScreen() {
   const setQuantity = useSetQuantity();
   const adjust = useAdjustQuantity();
   const deleteProduct = useDeleteProduct();
+  const deleteItem = useDeleteItem();
+  const lotSwipeGroup = useSwipeRowGroup();
   const { data: categories } = useProductCategories();
 
   const product = useMemo(() => totals?.find((t) => t.product_id === id), [totals, id]);
@@ -291,6 +298,41 @@ export default function ProductDetailScreen() {
               router.back();
             } catch (err) {
               Alert.alert('Konnte nicht gelöscht werden', errorMessage(err));
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  /**
+   * Removes one lot outright — this location's stock of the product, gone —
+   * rather than counting it down to zero. Zeroing deliberately keeps the
+   * row (a sealed pack you know is coming, an empty shelf that still marks
+   * "this is where it lives"); this is for the row that should not exist at
+   * all, a duplicate scan or a place it never actually sat. The product and
+   * every other lot are untouched.
+   */
+  function confirmDeleteLot(lot: { id: string; location_id: string | null; quantity: number }) {
+    const where = lot.location_id
+      ? ((locations ?? []).find((l) => l.id === lot.location_id)?.path ?? 'diesem Ort')
+      : 'ohne Ort';
+
+    Alert.alert(
+      `${product?.name} ${equipment ? 'entfernen' : `bei ${where} entfernen`}?`,
+      equipment
+        ? `Entfernt den Eintrag bei ${where}. Der Katalogeintrag und der feste Platz bleiben erhalten.`
+        : 'Nur dieser Posten — der Rest des Bestands bleibt unangetastet.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Entfernen',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteItem.mutateAsync(lot.id);
+            } catch (err) {
+              Alert.alert('Konnte nicht entfernt werden', errorMessage(err));
             }
           },
         },
@@ -492,45 +534,60 @@ export default function ProductDetailScreen() {
             (lots ?? []).map((lot, index) => (
               <View key={lot.id}>
                 {index > 0 ? <View style={styles.divider} /> : null}
-                <Pressable
-                  onPress={() => togglePanel(lot.id, lot.quantity)}
-                  style={styles.lotRow}
-                  accessibilityRole="button"
-                  accessibilityLabel={equipment ? 'Ort ändern' : 'Menge und Ort ändern'}
+                <SwipeRow
+                  id={lot.id}
+                  group={lotSwipeGroup}
+                  rightActions={[
+                    {
+                      key: 'delete',
+                      icon: 'trash-outline',
+                      label: 'Entfernen',
+                      tone: 'danger',
+                      accessibilityLabel: `${lot.storage_locations?.name ?? 'Eintrag'} entfernen`,
+                      onPress: () => confirmDeleteLot(lot),
+                    },
+                  ]}
                 >
-                  <Ionicons
-                    name={misplacedLots.has(lot.id) ? 'alert-circle-outline' : 'location-outline'}
-                    size={16}
-                    color={misplacedLots.has(lot.id) ? colors.warning : colors.textFaint}
-                  />
-                  <View style={styles.lotText}>
-                    <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
-                    {equipment ? (
-                      misplacedLots.has(lot.id) ? (
-                        <Text style={styles.lotWarning}>Gehört: {homePath}</Text>
-                      ) : home ? (
-                        <Text style={styles.lotOk}>Am Platz</Text>
-                      ) : null
-                    ) : lot.opened_at || lot.expires_on ? (
-                      <Text style={styles.lotMeta}>
-                        {[
-                          lot.opened_at ? 'angebrochen' : null,
-                          lot.expires_on ? `MHD ${formatDate(lot.expires_on)}` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Text style={styles.lotQuantity}>
-                    {formatQuantityWithUnit(lot.quantity, lot.unit)}
-                  </Text>
-                  <Ionicons
-                    name={openPanel === lot.id ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color={colors.textFaint}
-                  />
-                </Pressable>
+                  <Pressable
+                    onPress={() => togglePanel(lot.id, lot.quantity)}
+                    style={styles.lotRow}
+                    accessibilityRole="button"
+                    accessibilityLabel={equipment ? 'Ort ändern' : 'Menge und Ort ändern'}
+                  >
+                    <Ionicons
+                      name={misplacedLots.has(lot.id) ? 'alert-circle-outline' : 'location-outline'}
+                      size={16}
+                      color={misplacedLots.has(lot.id) ? colors.warning : colors.textFaint}
+                    />
+                    <View style={styles.lotText}>
+                      <Text style={styles.lotName}>{lot.storage_locations?.name ?? 'Ohne Ort'}</Text>
+                      {equipment ? (
+                        misplacedLots.has(lot.id) ? (
+                          <Text style={styles.lotWarning}>Gehört: {homePath}</Text>
+                        ) : home ? (
+                          <Text style={styles.lotOk}>Am Platz</Text>
+                        ) : null
+                      ) : lot.opened_at || lot.expires_on ? (
+                        <Text style={styles.lotMeta}>
+                          {[
+                            lot.opened_at ? 'angebrochen' : null,
+                            lot.expires_on ? `MHD ${formatDate(lot.expires_on)}` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.lotQuantity}>
+                      {formatQuantityWithUnit(lot.quantity, lot.unit)}
+                    </Text>
+                    <Ionicons
+                      name={openPanel === lot.id ? 'chevron-up' : 'chevron-down'}
+                      size={16}
+                      color={colors.textFaint}
+                    />
+                  </Pressable>
+                </SwipeRow>
 
                 {openPanel === lot.id ? (
                   <View style={styles.panel}>

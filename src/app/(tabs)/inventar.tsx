@@ -7,15 +7,19 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import { Card, EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
 import { Segmented } from '../../components/Segmented';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import {
   useAdjustQuantity,
+  useDeleteItem,
   useInventoryItems,
   useInventoryTotals,
   useLocations,
   useMoveItem,
 } from '../../features/inventory/hooks';
+import { Alert } from '../../lib/alert';
 import type { ProductKind } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { formatDate, formatQuantity, formatQuantityWithUnit } from '../../lib/format';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
@@ -71,12 +75,16 @@ export default function InventoryScreen() {
     },
     restockName: { ...typography.body, color: c.text, flex: 1 },
     restockQuantity: { ...typography.caption, color: c.textMuted },
+    // Card draws its own shadow, which SwipeRow would clip along with the
+    // delete action it hides — so the margin and matching radius sit on
+    // SwipeRow's container, outside that clip. See fixkosten.tsx for the
+    // same pattern.
+    itemWrap: { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderRadius: radius.lg },
+    swipeContainer: { borderRadius: radius.lg },
     itemCard: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: spacing.md,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
       paddingVertical: spacing.md,
     },
     thumb: { width: 44, height: 44, borderRadius: radius.sm, backgroundColor: c.surfaceMuted },
@@ -113,6 +121,8 @@ export default function InventoryScreen() {
   const { data: locations } = useLocations();
   const adjust = useAdjustQuantity();
   const moveItem = useMoveItem();
+  const deleteItem = useDeleteItem();
+  const swipeGroup = useSwipeRowGroup();
   const [kind, setKind] = useState<ProductKind>('consumable');
   const [search, setSearch] = useState('');
 
@@ -156,6 +166,35 @@ export default function InventoryScreen() {
   }, [ofKind, search]);
 
   const equipment = kind === 'equipment';
+
+  /**
+   * Removes this one lot — this product, at this location, at this expiry —
+   * outright, rather than counting it down to zero. Zeroing keeps the row
+   * (see the note on produkt/[id].tsx: an emptied lot still marks "this is
+   * where it usually sits"); this is for the row that should not have
+   * existed at all, a duplicate scan or a location it never actually was at.
+   * The product itself is untouched either way.
+   */
+  function confirmDeleteItem(item: { id: string; products: { name: string } | null }) {
+    Alert.alert(
+      `${item.products?.name ?? 'Eintrag'} entfernen?`,
+      'Nur dieser Posten an diesem Ort — der Rest des Bestands bleibt unangetastet.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Entfernen',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteItem.mutateAsync(item.id);
+            } catch (err) {
+              Alert.alert('Konnte nicht entfernt werden', errorMessage(err));
+            }
+          },
+        },
+      ],
+    );
+  }
 
   if (isLoading) return <LoadingState label="Inventar wird geladen…" />;
   if (error) return <ErrorState error={error} />;
@@ -287,95 +326,115 @@ export default function InventoryScreen() {
           const misplaced = equipment && !!homePath && item.location_id !== home;
 
           return (
-            <Card
-              style={styles.itemCard}
-              onPress={
-                item.product_id
-                  ? () => router.push(`/inventar/produkt/${item.product_id}`)
-                  : undefined
-              }
-            >
-              {item.products?.image_url ? (
-                <Image source={{ uri: item.products.image_url }} style={styles.thumb} contentFit="cover" />
-              ) : (
-                <View style={[styles.thumb, styles.thumbPlaceholder]}>
-                  <Ionicons
-                    name={equipment ? 'construct-outline' : 'cube-outline'}
-                    size={20}
-                    color={colors.textFaint}
-                  />
-                </View>
-              )}
-
-              <View style={styles.itemText}>
-                <Text style={styles.itemName} numberOfLines={1}>
-                  {item.products?.name ?? 'Unbekannt'}
-                </Text>
-                <Text style={styles.itemMeta} numberOfLines={1}>
-                  {item.storage_locations?.name ?? 'Ohne Ort'}
-                  {item.products?.brand ? ` · ${item.products.brand}` : ''}
-                  {!equipment && item.opened_at ? ' · angebrochen' : ''}
-                  {equipment && item.quantity !== 1 ? ` · ${formatQuantity(item.quantity)}×` : ''}
-                </Text>
-
-                {equipment ? (
-                  misplaced ? (
-                    <Text style={styles.itemWarning} numberOfLines={1}>
-                      Gehört: {homePath}
-                    </Text>
-                  ) : home ? (
-                    <Text style={styles.itemOk}>Am Platz</Text>
+            <View style={styles.itemWrap}>
+              <SwipeRow
+                id={item.id}
+                group={swipeGroup}
+                containerStyle={styles.swipeContainer}
+                rightActions={[
+                  {
+                    key: 'delete',
+                    icon: 'trash-outline',
+                    label: 'Entfernen',
+                    tone: 'danger',
+                    accessibilityLabel: `${item.products?.name ?? 'Eintrag'} entfernen`,
+                    onPress: () => confirmDeleteItem(item),
+                  },
+                ]}
+              >
+                <Card
+                  style={styles.itemCard}
+                  onPress={
+                    item.product_id
+                      ? () => router.push(`/inventar/produkt/${item.product_id}`)
+                      : undefined
+                  }
+                >
+                  {item.products?.image_url ? (
+                    <Image source={{ uri: item.products.image_url }} style={styles.thumb} contentFit="cover" />
                   ) : (
-                    <Text style={styles.itemMeta}>Kein fester Platz</Text>
-                  )
-                ) : low || expiringSoon ? (
-                  <Text style={styles.itemWarning}>
-                    {low ? 'Geht zur Neige' : ''}
-                    {low && expiringSoon ? ' · ' : ''}
-                    {expiringSoon && item.expires_on ? `MHD ${formatDate(item.expires_on)}` : ''}
-                  </Text>
-                ) : null}
-              </View>
+                    <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                      <Ionicons
+                        name={equipment ? 'construct-outline' : 'cube-outline'}
+                        size={20}
+                        color={colors.textFaint}
+                      />
+                    </View>
+                  )}
 
-              {equipment ? (
-                misplaced ? (
-                  <Pressable
-                    // Moves the whole lot, not one of it: a tool that is in the
-                    // wrong room is in the wrong room entirely. inventory_move
-                    // merges it into whatever already sits at the Platz.
-                    onPress={() => void moveItem.mutateAsync({ itemId: item.id, locationId: home })}
-                    style={styles.returnButton}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Zurück an den Platz: ${homePath}`}
-                  >
-                    <Ionicons name="arrow-undo-outline" size={14} color={colors.warning} />
-                    <Text style={styles.returnLabel}>Zurück</Text>
-                  </Pressable>
-                ) : null
-              ) : (
-                <View style={styles.stepper}>
-                  <Pressable
-                    onPress={() => void adjust.mutateAsync({ itemId: item.id, delta: -1, reason: 'consume' })}
-                    hitSlop={6}
-                    style={styles.stepperButton}
-                    accessibilityLabel="Eins entnehmen"
-                  >
-                    <Ionicons name="remove" size={18} color={colors.text} />
-                  </Pressable>
+                  <View style={styles.itemText}>
+                    <Text style={styles.itemName} numberOfLines={1}>
+                      {item.products?.name ?? 'Unbekannt'}
+                    </Text>
+                    <Text style={styles.itemMeta} numberOfLines={1}>
+                      {item.storage_locations?.name ?? 'Ohne Ort'}
+                      {item.products?.brand ? ` · ${item.products.brand}` : ''}
+                      {!equipment && item.opened_at ? ' · angebrochen' : ''}
+                      {equipment && item.quantity !== 1 ? ` · ${formatQuantity(item.quantity)}×` : ''}
+                    </Text>
 
-                  <Text style={styles.quantity}>{formatQuantity(item.quantity)}</Text>
+                    {equipment ? (
+                      misplaced ? (
+                        <Text style={styles.itemWarning} numberOfLines={1}>
+                          Gehört: {homePath}
+                        </Text>
+                      ) : home ? (
+                        <Text style={styles.itemOk}>Am Platz</Text>
+                      ) : (
+                        <Text style={styles.itemMeta}>Kein fester Platz</Text>
+                      )
+                    ) : low || expiringSoon ? (
+                      <Text style={styles.itemWarning}>
+                        {low ? 'Geht zur Neige' : ''}
+                        {low && expiringSoon ? ' · ' : ''}
+                        {expiringSoon && item.expires_on ? `MHD ${formatDate(item.expires_on)}` : ''}
+                      </Text>
+                    ) : null}
+                  </View>
 
-                  <Pressable
-                    onPress={() => void adjust.mutateAsync({ itemId: item.id, delta: 1 })}
-                    hitSlop={6}
-                    style={styles.stepperButton}
-                    accessibilityLabel="Eins hinzufügen"
-                  >
-                    <Ionicons name="add" size={18} color={colors.text} />
-                  </Pressable>
-                </View>
-              )}
-            </Card>
+                  {equipment ? (
+                    misplaced ? (
+                      <Pressable
+                        // Moves the whole lot, not one of it: a tool that is in the
+                        // wrong room is in the wrong room entirely. inventory_move
+                        // merges it into whatever already sits at the Platz.
+                        onPress={() => void moveItem.mutateAsync({ itemId: item.id, locationId: home })}
+                        style={styles.returnButton}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Zurück an den Platz: ${homePath}`}
+                      >
+                        <Ionicons name="arrow-undo-outline" size={14} color={colors.warning} />
+                        <Text style={styles.returnLabel}>Zurück</Text>
+                      </Pressable>
+                    ) : null
+                  ) : (
+                    <View style={styles.stepper}>
+                      <Pressable
+                        onPress={() =>
+                          void adjust.mutateAsync({ itemId: item.id, delta: -1, reason: 'consume' })
+                        }
+                        hitSlop={6}
+                        style={styles.stepperButton}
+                        accessibilityLabel="Eins entnehmen"
+                      >
+                        <Ionicons name="remove" size={18} color={colors.text} />
+                      </Pressable>
+
+                      <Text style={styles.quantity}>{formatQuantity(item.quantity)}</Text>
+
+                      <Pressable
+                        onPress={() => void adjust.mutateAsync({ itemId: item.id, delta: 1 })}
+                        hitSlop={6}
+                        style={styles.stepperButton}
+                        accessibilityLabel="Eins hinzufügen"
+                      >
+                        <Ionicons name="add" size={18} color={colors.text} />
+                      </Pressable>
+                    </View>
+                  )}
+                </Card>
+              </SwipeRow>
+            </View>
           );
         }}
       />

@@ -1,10 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, RefreshControl, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. Rows here sit inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import { exportDogCommands } from '../../features/dogs/export';
 import {
@@ -45,6 +49,15 @@ export default function DogCommandsScreen() {
     composerActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
     list: { paddingBottom: spacing.xxl * 2 },
+    // Shadow lives outside SwipeRow — it clips its own bounds to hide the
+    // delete action, which would clip a shadow drawn inside it too.
+    rowWrap: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      borderRadius: radius.md,
+      ...shadow.card,
+    },
+    swipeContainer: { borderRadius: radius.md },
     row: {
       flexDirection: 'row' as const,
       alignItems: 'flex-start' as const,
@@ -53,9 +66,6 @@ export default function DogCommandsScreen() {
       borderRadius: radius.md,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
-      ...shadow.card,
     },
     rowEditing: { borderWidth: 1, borderColor: c.primary },
     rowText: { flex: 1, gap: 2 },
@@ -68,6 +78,7 @@ export default function DogCommandsScreen() {
   const addCommand = useAddDogCommand();
   const updateCommand = useUpdateDogCommand();
   const deleteCommand = useDeleteDogCommand();
+  const swipeGroup = useSwipeRowGroup();
 
   const [command, setCommand] = useState('');
   const [description, setDescription] = useState('');
@@ -191,31 +202,40 @@ export default function DogCommandsScreen() {
           />
         }
         renderItem={({ item }) => (
-          <View style={[styles.row, editingId === item.id && styles.rowEditing]}>
-            <Ionicons name="paw" size={18} color={colors.primary} />
-
-            <Pressable
-              onPress={() => startEditing(item)}
-              style={styles.rowText}
-              accessibilityRole="button"
-              accessibilityLabel={`${item.command} bearbeiten`}
+          <View style={styles.rowWrap}>
+            <SwipeRow
+              id={item.id}
+              group={swipeGroup}
+              containerStyle={styles.swipeContainer}
+              rightActions={[
+                {
+                  key: 'delete',
+                  icon: 'trash-outline',
+                  label: 'Löschen',
+                  tone: 'danger',
+                  accessibilityLabel: `${item.command} löschen`,
+                  onPress: () => confirmDelete(item.id, item.command),
+                },
+              ]}
             >
-              <Text style={styles.command}>{item.command}</Text>
-              {item.description ? (
-                <Text style={styles.description}>{item.description}</Text>
-              ) : (
-                <Text style={styles.missing}>Noch ohne Beschreibung</Text>
-              )}
-            </Pressable>
+              <View style={[styles.row, editingId === item.id && styles.rowEditing]}>
+                <Ionicons name="paw" size={18} color={colors.primary} />
 
-            <Pressable
-              onPress={() => confirmDelete(item.id, item.command)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={`${item.command} löschen`}
-            >
-              <Ionicons name="trash-outline" size={18} color={colors.textFaint} />
-            </Pressable>
+                <Pressable
+                  onPress={() => startEditing(item)}
+                  style={styles.rowText}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.command} bearbeiten`}
+                >
+                  <Text style={styles.command}>{item.command}</Text>
+                  {item.description ? (
+                    <Text style={styles.description}>{item.description}</Text>
+                  ) : (
+                    <Text style={styles.missing}>Noch ohne Beschreibung</Text>
+                  )}
+                </Pressable>
+              </View>
+            </SwipeRow>
           </View>
         )}
       />

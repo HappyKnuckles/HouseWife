@@ -1,10 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, RefreshControl, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. Rows here sit inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import {
   useAddRule,
@@ -32,6 +36,13 @@ export default function RulesScreen() {
     composerActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
     list: { paddingBottom: spacing.xxl * 2 },
+    rowWrap: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      borderRadius: radius.md,
+      ...shadow.card,
+    },
+    swipeContainer: { borderRadius: radius.md },
     row: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
@@ -40,9 +51,6 @@ export default function RulesScreen() {
       borderRadius: radius.md,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
-      ...shadow.card,
     },
     rowEditing: { borderWidth: 1, borderColor: c.primary },
     number: { ...typography.bodyStrong, color: c.primary, minWidth: 22 },
@@ -56,6 +64,7 @@ export default function RulesScreen() {
   const updateRule = useUpdateRule();
   const deleteRule = useDeleteRule();
   const moveRule = useMoveRule();
+  const swipeGroup = useSwipeRowGroup();
 
   const [text, setText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,57 +152,66 @@ export default function RulesScreen() {
           />
         }
         renderItem={({ item, index }) => (
-          <View style={[styles.row, editingId === item.id && styles.rowEditing]}>
-            <Text style={styles.number}>{index + 1}.</Text>
-
-            <Pressable
-              onPress={() => startEditing(item.id, item.text)}
-              style={styles.flex}
-              accessibilityRole="button"
-              accessibilityLabel={`${item.text} bearbeiten`}
+          <View style={styles.rowWrap}>
+            <SwipeRow
+              id={item.id}
+              group={swipeGroup}
+              containerStyle={styles.swipeContainer}
+              rightActions={[
+                {
+                  key: 'delete',
+                  icon: 'trash-outline',
+                  label: 'Löschen',
+                  tone: 'danger',
+                  accessibilityLabel: `${item.text} löschen`,
+                  onPress: () => confirmDelete(item.id, item.text),
+                },
+              ]}
             >
-              <Text style={styles.rowText}>{item.text}</Text>
-            </Pressable>
+              <View style={[styles.row, editingId === item.id && styles.rowEditing]}>
+                <Text style={styles.number}>{index + 1}.</Text>
 
-            <View style={styles.arrows}>
-              <Pressable
-                onPress={() => void moveRule.mutateAsync({ id: item.id, direction: 'up' })}
-                disabled={index === 0}
-                hitSlop={6}
-                style={styles.arrow}
-                accessibilityRole="button"
-                accessibilityLabel="Nach oben"
-              >
-                <Ionicons
-                  name="chevron-up"
-                  size={16}
-                  color={index === 0 ? colors.border : colors.textFaint}
-                />
-              </Pressable>
-              <Pressable
-                onPress={() => void moveRule.mutateAsync({ id: item.id, direction: 'down' })}
-                disabled={index === list.length - 1}
-                hitSlop={6}
-                style={styles.arrow}
-                accessibilityRole="button"
-                accessibilityLabel="Nach unten"
-              >
-                <Ionicons
-                  name="chevron-down"
-                  size={16}
-                  color={index === list.length - 1 ? colors.border : colors.textFaint}
-                />
-              </Pressable>
-            </View>
+                <Pressable
+                  onPress={() => startEditing(item.id, item.text)}
+                  style={styles.flex}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.text} bearbeiten`}
+                >
+                  <Text style={styles.rowText}>{item.text}</Text>
+                </Pressable>
 
-            <Pressable
-              onPress={() => confirmDelete(item.id, item.text)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={`${item.text} löschen`}
-            >
-              <Ionicons name="trash-outline" size={18} color={colors.textFaint} />
-            </Pressable>
+                <View style={styles.arrows}>
+                  <Pressable
+                    onPress={() => void moveRule.mutateAsync({ id: item.id, direction: 'up' })}
+                    disabled={index === 0}
+                    hitSlop={6}
+                    style={styles.arrow}
+                    accessibilityRole="button"
+                    accessibilityLabel="Nach oben"
+                  >
+                    <Ionicons
+                      name="chevron-up"
+                      size={16}
+                      color={index === 0 ? colors.border : colors.textFaint}
+                    />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void moveRule.mutateAsync({ id: item.id, direction: 'down' })}
+                    disabled={index === list.length - 1}
+                    hitSlop={6}
+                    style={styles.arrow}
+                    accessibilityRole="button"
+                    accessibilityLabel="Nach unten"
+                  >
+                    <Ionicons
+                      name="chevron-down"
+                      size={16}
+                      color={index === list.length - 1 ? colors.border : colors.textFaint}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+            </SwipeRow>
           </View>
         )}
       />

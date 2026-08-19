@@ -2,12 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { FlatList, RefreshControl, ScrollView, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. Rows here sit inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import { useMemberMap } from '../../features/household/hooks';
 import {
@@ -60,18 +64,26 @@ export default function ShoppingListScreen() {
     },
     composer: { paddingHorizontal: spacing.lg, gap: spacing.sm, paddingBottom: spacing.md },
     list: { paddingBottom: spacing.xxl * 2 },
+    // See the matching comment in todos.tsx: the shadow has to live outside
+    // SwipeRow, which clips its own bounds to hide the delete action.
+    rowWrap: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      borderRadius: radius.md,
+      ...shadow.card,
+    },
+    swipeContainer: { borderRadius: radius.md },
     row: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: spacing.md,
       backgroundColor: c.surface,
       borderRadius: radius.md,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
-      ...shadow.card,
     },
+    // Fading `row` itself let the swipe action's color bleed through a
+    // bought item's card even before swiping (an opaque background stops
+    // being opaque at 55%) — so the fade lives on the content instead, and
+    // `row` stays a solid card no matter what sits behind it.
+    rowContent: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.md },
     rowDone: { opacity: 0.55 },
     checkbox: {
       width: 24,
@@ -157,6 +169,7 @@ export default function ShoppingListScreen() {
   const deleteItem = useDeleteTodo('shopping');
   const clearBought = useClearCompleted('shopping');
   const setQuantity = useSetQuantity('shopping');
+  const swipeGroup = useSwipeRowGroup();
 
   const [title, setTitle] = useState('');
   /** Which entry the composer is currently editing; null = writing a new one. */
@@ -210,6 +223,13 @@ export default function ShoppingListScreen() {
   function cancelEditing() {
     setEditingId(null);
     setTitle('');
+  }
+
+  function confirmDelete(id: string, title: string) {
+    Alert.alert(`${title} löschen?`, 'Das lässt sich nicht rückgängig machen.', [
+      { text: 'Abbrechen', style: 'cancel' },
+      { text: 'Löschen', style: 'destructive', onPress: () => void deleteItem.mutateAsync(id) },
+    ]);
   }
 
   return (
@@ -315,107 +335,115 @@ export default function ShoppingListScreen() {
           const fromInventory = item.source === 'restock';
 
           return (
-            <View
-              style={[
-                styles.row,
-                item.is_done && styles.rowDone,
-                editingId === item.id && styles.rowEditing,
-              ]}
-            >
-              <Pressable
-                onPress={() => {
-                  void Haptics.selectionAsync();
-                  void toggleItem.mutateAsync({ id: item.id, isDone: !item.is_done });
-                }}
-                hitSlop={8}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: item.is_done }}
-                style={[styles.checkbox, item.is_done && styles.checkboxDone]}
+            <View style={styles.rowWrap}>
+              <SwipeRow
+                id={item.id}
+                group={swipeGroup}
+                containerStyle={styles.swipeContainer}
+                rightActions={[
+                  {
+                    key: 'delete',
+                    icon: 'trash-outline',
+                    label: 'Löschen',
+                    tone: 'danger',
+                    accessibilityLabel: `${item.title} löschen`,
+                    onPress: () => confirmDelete(item.id, item.title),
+                  },
+                ]}
               >
-                {item.is_done ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
-              </Pressable>
+                <View style={[styles.row, editingId === item.id && styles.rowEditing]}>
+                  <View style={[styles.rowContent, item.is_done && styles.rowDone]}>
+                    <Pressable
+                      onPress={() => {
+                        void Haptics.selectionAsync();
+                        void toggleItem.mutateAsync({ id: item.id, isDone: !item.is_done });
+                      }}
+                      hitSlop={8}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: item.is_done }}
+                      style={[styles.checkbox, item.is_done && styles.checkboxDone]}
+                    >
+                      {item.is_done ? (
+                        <Ionicons name="checkmark" size={16} color={colors.textInverse} />
+                      ) : null}
+                    </Pressable>
 
-              <Pressable
-                onPress={() => startEditing(item)}
-                style={styles.rowText}
-                accessibilityRole="button"
-                accessibilityLabel={`${item.title} bearbeiten`}
-              >
-                <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
-                  {item.title}
-                </Text>
-                {/* The author moved down here from an avatar on the right: the
-                    stepper needs that width more than a coloured circle did,
-                    and "von Nico" says the same thing without decoding. */}
-                {fromInventory ? (
-                  <View style={styles.metaRow}>
-                    <Ionicons name="cube-outline" size={12} color={colors.textFaint} />
-                    <Text style={styles.rowMeta}>Bestand niedrig</Text>
+                    <Pressable
+                      onPress={() => startEditing(item)}
+                      style={styles.rowText}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${item.title} bearbeiten`}
+                    >
+                      <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
+                        {item.title}
+                      </Text>
+                      {/* The author moved down here from an avatar on the right: the
+                          stepper needs that width more than a coloured circle did,
+                          and "von Nico" says the same thing without decoding. */}
+                      {fromInventory ? (
+                        <View style={styles.metaRow}>
+                          <Ionicons name="cube-outline" size={12} color={colors.textFaint} />
+                          <Text style={styles.rowMeta}>Bestand niedrig</Text>
+                        </View>
+                      ) : author ? (
+                        <Text style={styles.rowMeta}>von {author.display_name}</Text>
+                      ) : null}
+                    </Pressable>
+
+                    {/* Only while it is still to be bought — once it is in the
+                        trolley the number is history, and a stepper on a ticked row
+                        invites changing what you already carried home. */}
+                    {!item.is_done ? (
+                      <View style={styles.stepper}>
+                        <Pressable
+                          onPress={() =>
+                            void setQuantity.mutateAsync({
+                              id: item.id,
+                              quantity: Math.max(1, item.quantity - 1),
+                            })
+                          }
+                          disabled={item.quantity <= 1}
+                          hitSlop={4}
+                          style={styles.stepperButton}
+                          accessibilityRole="button"
+                          accessibilityLabel="Eins weniger"
+                        >
+                          <Ionicons
+                            name="remove"
+                            size={16}
+                            color={item.quantity <= 1 ? colors.border : colors.text}
+                          />
+                        </Pressable>
+
+                        <Text style={styles.stepperValue}>{formatQuantity(item.quantity)}</Text>
+
+                        <Pressable
+                          onPress={() =>
+                            void setQuantity.mutateAsync({ id: item.id, quantity: item.quantity + 1 })
+                          }
+                          hitSlop={4}
+                          style={styles.stepperButton}
+                          accessibilityRole="button"
+                          accessibilityLabel="Eins mehr"
+                        >
+                          <Ionicons name="add" size={16} color={colors.text} />
+                        </Pressable>
+                      </View>
+                    ) : null}
+
+                    {fromInventory && item.product_id ? (
+                      <Pressable
+                        onPress={() => router.push(`/inventar/produkt/${item.product_id}`)}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel="Produkt öffnen"
+                      >
+                        <Ionicons name="open-outline" size={18} color={colors.textFaint} />
+                      </Pressable>
+                    ) : null}
                   </View>
-                ) : author ? (
-                  <Text style={styles.rowMeta}>von {author.display_name}</Text>
-                ) : null}
-              </Pressable>
-
-              {/* Only while it is still to be bought — once it is in the
-                  trolley the number is history, and a stepper on a ticked row
-                  invites changing what you already carried home. */}
-              {!item.is_done ? (
-                <View style={styles.stepper}>
-                  <Pressable
-                    onPress={() =>
-                      void setQuantity.mutateAsync({
-                        id: item.id,
-                        quantity: Math.max(1, item.quantity - 1),
-                      })
-                    }
-                    disabled={item.quantity <= 1}
-                    hitSlop={4}
-                    style={styles.stepperButton}
-                    accessibilityRole="button"
-                    accessibilityLabel="Eins weniger"
-                  >
-                    <Ionicons
-                      name="remove"
-                      size={16}
-                      color={item.quantity <= 1 ? colors.border : colors.text}
-                    />
-                  </Pressable>
-
-                  <Text style={styles.stepperValue}>{formatQuantity(item.quantity)}</Text>
-
-                  <Pressable
-                    onPress={() =>
-                      void setQuantity.mutateAsync({ id: item.id, quantity: item.quantity + 1 })
-                    }
-                    hitSlop={4}
-                    style={styles.stepperButton}
-                    accessibilityRole="button"
-                    accessibilityLabel="Eins mehr"
-                  >
-                    <Ionicons name="add" size={16} color={colors.text} />
-                  </Pressable>
                 </View>
-              ) : null}
-
-              {fromInventory && item.product_id ? (
-                <Pressable
-                  onPress={() => router.push(`/inventar/produkt/${item.product_id}`)}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Produkt öffnen"
-                >
-                  <Ionicons name="open-outline" size={18} color={colors.textFaint} />
-                </Pressable>
-              ) : null}
-
-              <Pressable
-                onPress={() => void deleteItem.mutateAsync(item.id)}
-                hitSlop={8}
-                accessibilityLabel={`${item.title} löschen`}
-              >
-                <Ionicons name="trash-outline" size={18} color={colors.textFaint} />
-              </Pressable>
+              </SwipeRow>
             </View>
           );
         }}

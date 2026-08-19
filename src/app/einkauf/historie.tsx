@@ -1,12 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, SectionList, Text, View } from 'react-native';
+import { SectionList, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. The trip card sits inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Avatar } from '../../components/Avatar';
 import { EmptyState } from '../../components/Card';
 import { Segmented } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { useMemberMap } from '../../features/household/hooks';
 import { useDeleteTrip, useShoppingHistory, useShoppingSuggestions } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
@@ -62,11 +66,17 @@ export default function ShoppingHistoryScreen() {
     },
     // One checkout. The card is what separates two shops on the same day —
     // no clock needed to tell them apart, they are visibly two things.
+    // Margin and radius moved onto SwipeRow's own containerStyle: it clips its
+    // bounds to hide the delete action off-screen, so the radius has to live
+    // wherever that clip happens for the corners to line up.
+    tripSwipe: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      borderRadius: radius.md,
+    },
     trip: {
       backgroundColor: c.surface,
       borderRadius: radius.md,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
       paddingHorizontal: spacing.lg,
       paddingBottom: spacing.xs,
     },
@@ -161,6 +171,7 @@ export default function ShoppingHistoryScreen() {
   const { data: suggestions } = useShoppingSuggestions();
   const memberMap = useMemberMap();
   const deleteTrip = useDeleteTrip();
+  const swipeGroup = useSwipeRowGroup();
 
   /**
    * Two levels: the day is the heading, and each checkout under it is its own
@@ -310,92 +321,99 @@ export default function ShoppingHistoryScreen() {
             <Text style={styles.dayHeading}>{formatDate(section.title)}</Text>
           )}
           renderItem={({ item: trip }) => (
-            <View style={styles.trip}>
-              <View style={styles.tripHeader}>
-                <Text style={styles.tripMeta}>{trip.rows.length} Sachen</Text>
+            <SwipeRow
+              id={trip.closedAt}
+              group={swipeGroup}
+              containerStyle={styles.tripSwipe}
+              rightActions={[
+                {
+                  key: 'delete',
+                  icon: 'trash-outline',
+                  label: 'Löschen',
+                  tone: 'danger',
+                  accessibilityLabel: 'Diesen Einkauf löschen',
+                  onPress: () => confirmDeleteTrip(trip),
+                },
+              ]}
+            >
+              <View style={styles.trip}>
+                <View style={styles.tripHeader}>
+                  <Text style={styles.tripMeta}>{trip.rows.length} Sachen</Text>
 
-                {trip.expenseId ? (
-                  <Pressable
-                    onPress={() => router.push(`/ausgaben/${trip.expenseId}`)}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                  >
-                    <Text style={styles.tripAction}>Ausgabe ansehen</Text>
-                  </Pressable>
-                ) : (
-                  <Pressable
-                    onPress={() => bookExpense(trip.rows)}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Ausgabe für diesen Einkauf buchen"
-                  >
-                    <Text style={styles.tripAction}>Ausgabe buchen</Text>
-                  </Pressable>
-                )}
-
-                <Pressable
-                  onPress={() => confirmDeleteTrip(trip)}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Diesen Einkauf löschen"
-                >
-                  <Ionicons name="trash-outline" size={16} color={colors.textFaint} />
-                </Pressable>
-              </View>
-
-              {trip.rows.map((row, index) => {
-                const person = row.done_by ? memberMap[row.done_by] : null;
-
-                return (
-                  <View key={row.id}>
-                    {index > 0 ? <View style={styles.divider} /> : null}
-
-                    {/* A row is about the thing. The shop's expense is the
-                        block header's business — repeating it per line put a
-                        receipt icon on every single row of a booked shop. */}
+                  {trip.expenseId ? (
                     <Pressable
-                      style={styles.row}
-                      disabled={!row.product_id}
-                      onPress={() =>
-                        row.product_id
-                          ? router.push(`/inventar/produkt/${row.product_id}`)
-                          : undefined
-                      }
-                      accessibilityRole={row.product_id ? 'button' : undefined}
+                      onPress={() => router.push(`/ausgaben/${trip.expenseId}`)}
+                      hitSlop={8}
+                      accessibilityRole="button"
                     >
-                      {/* "3× Milch", because two bottles and six are the same
-                          shop only in the sense that both happened. */}
-                      <Text style={styles.rowTitle} numberOfLines={1}>
-                        {row.quantity > 1 ? (
-                          <Text style={styles.rowCount}>{formatQuantity(row.quantity)}× </Text>
-                        ) : null}
-                        {row.title}
-                      </Text>
-
-                      {/* No "vor 3 Tagen" per row any more: the date is the
-                          heading above, and every row under it would repeat
-                          the same phrase. */}
-                      {row.source === 'restock' ? (
-                        <Text style={styles.rowMeta}>Nachkauf</Text>
-                      ) : null}
-
-                      {person ? (
-                        <Avatar
-                          name={person.display_name}
-                          color={person.color}
-                          size={22}
-                          accessibilityLabel={`abgehakt von ${person.display_name}`}
-                        />
-                      ) : null}
-
-                      {row.product_id ? (
-                        <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
-                      ) : null}
+                      <Text style={styles.tripAction}>Ausgabe ansehen</Text>
                     </Pressable>
-                  </View>
-                );
-              })}
-            </View>
+                  ) : (
+                    <Pressable
+                      onPress={() => bookExpense(trip.rows)}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel="Ausgabe für diesen Einkauf buchen"
+                    >
+                      <Text style={styles.tripAction}>Ausgabe buchen</Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                {trip.rows.map((row, index) => {
+                  const person = row.done_by ? memberMap[row.done_by] : null;
+
+                  return (
+                    <View key={row.id}>
+                      {index > 0 ? <View style={styles.divider} /> : null}
+
+                      {/* A row is about the thing. The shop's expense is the
+                          block header's business — repeating it per line put a
+                          receipt icon on every single row of a booked shop. */}
+                      <Pressable
+                        style={styles.row}
+                        disabled={!row.product_id}
+                        onPress={() =>
+                          row.product_id
+                            ? router.push(`/inventar/produkt/${row.product_id}`)
+                            : undefined
+                        }
+                        accessibilityRole={row.product_id ? 'button' : undefined}
+                      >
+                        {/* "3× Milch", because two bottles and six are the same
+                            shop only in the sense that both happened. */}
+                        <Text style={styles.rowTitle} numberOfLines={1}>
+                          {row.quantity > 1 ? (
+                            <Text style={styles.rowCount}>{formatQuantity(row.quantity)}× </Text>
+                          ) : null}
+                          {row.title}
+                        </Text>
+
+                        {/* No "vor 3 Tagen" per row any more: the date is the
+                            heading above, and every row under it would repeat
+                            the same phrase. */}
+                        {row.source === 'restock' ? (
+                          <Text style={styles.rowMeta}>Nachkauf</Text>
+                        ) : null}
+
+                        {person ? (
+                          <Avatar
+                            name={person.display_name}
+                            color={person.color}
+                            size={22}
+                            accessibilityLabel={`abgehakt von ${person.display_name}`}
+                          />
+                        ) : null}
+
+                        {row.product_id ? (
+                          <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+                        ) : null}
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            </SwipeRow>
           )}
         />
       ) : (

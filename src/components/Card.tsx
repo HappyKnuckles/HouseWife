@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
-import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
+// Gesture-handler's own Pressable, not React Native's: a Card can end up
+// nested inside a SwipeRow (see components/SwipeRow.tsx), and RN's Pressable
+// uses the legacy JS responder system, which does not know to back off when
+// a sibling gesture-handler Pan gesture (the swipe) claims the touch — a
+// swipe would fire onPress too. Gesture-handler's Pressable arbitrates on the
+// same native gesture system as the Pan, so it loses correctly instead.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { radius, shadow, spacing, typography } from '../lib/theme';
 import { useThemedStyles } from '../lib/theme-context';

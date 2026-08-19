@@ -4,8 +4,10 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import { Card, EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
-import { useEvents } from '../../features/events/hooks';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
+import { useDeleteEvent, useEvents } from '../../features/events/hooks';
 import { eventIcon, eventWhen, relativeDays } from '../../features/events/format';
+import { Alert } from '../../lib/alert';
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -48,12 +50,15 @@ export default function EventsScreen() {
       marginTop: spacing.md,
       marginBottom: spacing.sm,
     },
+    // Card draws its own shadow, which SwipeRow would clip along with the
+    // delete action it hides — so the margin and matching radius sit on
+    // SwipeRow's container, outside that clip.
+    rowWrap: { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderRadius: radius.lg },
+    swipeContainer: { borderRadius: radius.lg },
     row: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: spacing.md,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
       paddingVertical: spacing.md,
     },
     rowPast: { opacity: 0.55 },
@@ -72,11 +77,20 @@ export default function EventsScreen() {
   }));
 
   const { data: events, isLoading, isRefetching, refetch, error } = useEvents();
+  const deleteEvent = useDeleteEvent();
+  const swipeGroup = useSwipeRowGroup();
 
   if (isLoading) return <LoadingState label="Termine werden geladen…" />;
   if (error) return <ErrorState error={error} />;
 
   const list = events ?? [];
+
+  function confirmDelete(id: string, title: string) {
+    Alert.alert(`${title} löschen?`, 'Das lässt sich nicht rückgängig machen.', [
+      { text: 'Abbrechen', style: 'cancel' },
+      { text: 'Löschen', style: 'destructive', onPress: () => void deleteEvent.mutateAsync(id) },
+    ]);
+  }
   // The headline card. An anniversary is the one kind whose *past* is the
   // point, so it gets the day counter rather than a countdown.
   const anniversary = list.find((e) => e.kind === 'anniversary') ?? null;
@@ -132,45 +146,80 @@ export default function EventsScreen() {
           />
         }
         renderItem={({ item }) => (
-          <Card style={styles.row} onPress={() => router.push(`/termine/${item.id}`)}>
-            <View style={styles.icon}>
-              <Ionicons name={eventIcon(item.kind)} size={18} color={colors.textMuted} />
-            </View>
-            <View style={styles.rowText}>
-              <Text style={styles.rowTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={styles.rowMeta} numberOfLines={1}>
-                {eventWhen(item)}
-                {item.place ? ` · ${item.place}` : ''}
-              </Text>
-            </View>
-            <Text style={styles.countdown}>{relativeDays(item.days_until)}</Text>
-          </Card>
+          <View style={styles.rowWrap}>
+            <SwipeRow
+              id={item.id}
+              group={swipeGroup}
+              containerStyle={styles.swipeContainer}
+              rightActions={[
+                {
+                  key: 'delete',
+                  icon: 'trash-outline',
+                  label: 'Löschen',
+                  tone: 'danger',
+                  accessibilityLabel: `${item.title} löschen`,
+                  onPress: () => confirmDelete(item.id, item.title),
+                },
+              ]}
+            >
+              <Card style={styles.row} onPress={() => router.push(`/termine/${item.id}`)}>
+                <View style={styles.icon}>
+                  <Ionicons name={eventIcon(item.kind)} size={18} color={colors.textMuted} />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowTitle} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                  <Text style={styles.rowMeta} numberOfLines={1}>
+                    {eventWhen(item)}
+                    {item.place ? ` · ${item.place}` : ''}
+                  </Text>
+                </View>
+                <Text style={styles.countdown}>{relativeDays(item.days_until)}</Text>
+              </Card>
+            </SwipeRow>
+          </View>
         )}
         ListFooterComponent={
           past.length > 0 ? (
             <>
               <Text style={styles.sectionTitle}>Vorbei</Text>
               {past.map((item) => (
-                <Card
-                  key={item.id}
-                  style={[styles.row, styles.rowPast]}
-                  onPress={() => router.push(`/termine/${item.id}`)}
-                >
-                  <View style={styles.icon}>
-                    <Ionicons name={eventIcon(item.kind)} size={18} color={colors.textFaint} />
-                  </View>
-                  <View style={styles.rowText}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {item.title}
-                    </Text>
-                    <Text style={styles.rowMeta} numberOfLines={1}>
-                      {eventWhen(item)}
-                      {item.place ? ` · ${item.place}` : ''}
-                    </Text>
-                  </View>
-                </Card>
+                <View key={item.id} style={styles.rowWrap}>
+                  <SwipeRow
+                    id={item.id}
+                    group={swipeGroup}
+                    containerStyle={styles.swipeContainer}
+                    rightActions={[
+                      {
+                        key: 'delete',
+                        icon: 'trash-outline',
+                        label: 'Löschen',
+                        tone: 'danger',
+                        accessibilityLabel: `${item.title} löschen`,
+                        onPress: () => confirmDelete(item.id, item.title),
+                      },
+                    ]}
+                  >
+                    <Card
+                      style={[styles.row, styles.rowPast]}
+                      onPress={() => router.push(`/termine/${item.id}`)}
+                    >
+                      <View style={styles.icon}>
+                        <Ionicons name={eventIcon(item.kind)} size={18} color={colors.textFaint} />
+                      </View>
+                      <View style={styles.rowText}>
+                        <Text style={styles.rowTitle} numberOfLines={1}>
+                          {item.title}
+                        </Text>
+                        <Text style={styles.rowMeta} numberOfLines={1}>
+                          {eventWhen(item)}
+                          {item.place ? ` · ${item.place}` : ''}
+                        </Text>
+                      </View>
+                    </Card>
+                  </SwipeRow>
+                </View>
               ))}
             </>
           ) : null
