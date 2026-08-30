@@ -60,7 +60,9 @@ const nextKey = () => `alloc-${++allocationCounter}`;
  *
  * Money is deliberately not here. It belongs on the Ausgaben screen, which
  * already knows how to split a total, pick a payer and photograph a receipt,
- * so this screen finishes by handing over to it.
+ * so this screen finishes by handing over to it — unless it is told not to.
+ * "Ohne Ausgabe" closes the shop and stops there, because an Einkauf is not
+ * automatically an expense this household splits.
  */
 export default function ShoppingCheckoutScreen() {
   const router = useRouter();
@@ -214,7 +216,12 @@ export default function ShoppingCheckoutScreen() {
   /** Which allocation's location picker is open; only ever one. */
   const [picking, setPicking] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /**
+   * Which of the three finishes is running — not just "something is". They do
+   * measurably different amounts of work, and a spinner on the button that was
+   * not pressed is a lie about which one is happening.
+   */
+  const [busy, setBusy] = useState<'expense' | 'plain' | 'stockless' | null>(null);
 
   // Waited for rather than seeded twice: the suggested location comes out of
   // the inventory, and re-seeding once it arrives would overwrite whatever had
@@ -357,11 +364,33 @@ export default function ShoppingCheckoutScreen() {
     }
   }
 
-  async function finish(withStock: boolean) {
-    setBusy(true);
+  /**
+   * Closes the shop: what was bought leaves the list, optionally by way of the
+   * shelves and optionally by way of the Ausgaben screen.
+   *
+   * `expense: false` is not a shortcut — plenty of shopping costs this
+   * household nothing to split: paid from the Haushaltskasse, brought along by
+   * someone, a gift, a return, or simply a receipt nobody wants in the
+   * statistics. Forcing a 0-€ expense to get out of this screen would file all
+   * of those under "Lebensmittel" and quietly bend the Statistik.
+   *
+   * Nothing is lost by saying no here either: todos.expense_id stays null, the
+   * shop still shows up in der Einkaufshistorie, and that screen can book an
+   * expense against it later with the link landing exactly the same.
+   */
+  async function finish({ stock, expense }: { stock: boolean; expense: boolean }) {
+    setBusy(expense ? (stock ? 'expense' : 'stockless') : 'plain');
     try {
-      if (withStock) await bookStock();
+      if (stock) await bookStock();
       await closeRows.mutateAsync({ ids: bought.map((row) => row.id) });
+
+      // replace rather than back(): the list this screen was opened from has
+      // just been emptied, and a checkout for nothing is a dead end to return
+      // to — same reason the expense path below replaces too.
+      if (!expense) {
+        router.replace('/einkaufsliste');
+        return;
+      }
 
       // Every bought row, including the ones left out of the inventory —
       // skipping the Klopapier from the shelves does not stop you paying for
@@ -396,7 +425,7 @@ export default function ShoppingCheckoutScreen() {
     } catch (err) {
       Alert.alert('Konnte nicht eingeräumt werden', errorMessage(err));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -636,17 +665,41 @@ export default function ShoppingCheckoutScreen() {
                   ? `${stocking.length} einräumen · weiter zur Ausgabe`
                   : 'Weiter zur Ausgabe'
               }
-              onPress={() => void finish(true)}
-              disabled={busy}
-              loading={busy}
+              onPress={() => void finish({ stock: true, expense: true })}
+              disabled={busy !== null}
+              loading={busy === 'expense'}
               size="lg"
             />
+            {/* The same shop, minus the money. Ein Einkauf ist nicht
+                zwangsläufig eine Ausgabe — bezahlt aus der Haushaltskasse,
+                mitgebracht, geschenkt, umgetauscht. */}
             <Button
-              label="Ohne Inventar abschließen"
-              variant="ghost"
-              onPress={() => void finish(false)}
-              disabled={busy}
+              label={
+                stocking.length > 0
+                  ? `${stocking.length} einräumen · ohne Ausgabe`
+                  : 'Ohne Ausgabe abschließen'
+              }
+              variant="secondary"
+              onPress={() => void finish({ stock: true, expense: false })}
+              disabled={busy !== null}
+              loading={busy === 'plain'}
             />
+            <Text style={styles.hint}>
+              Ohne Ausgabe heißt nur: hier wird nichts gebucht. Der Einkauf steht trotzdem in der
+              Historie, und eine Ausgabe lässt sich dort jederzeit nachtragen.
+            </Text>
+            {/* Only where it says something the two buttons above do not: with
+                nothing left to put away it would be a third word for "weiter
+                zur Ausgabe". */}
+            {stocking.length > 0 ? (
+              <Button
+                label="Ohne Inventar abschließen"
+                variant="ghost"
+                onPress={() => void finish({ stock: false, expense: true })}
+                disabled={busy !== null}
+                loading={busy === 'stockless'}
+              />
+            ) : null}
           </View>
         </ScrollView>
       )}

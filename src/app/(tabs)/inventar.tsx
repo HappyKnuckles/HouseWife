@@ -303,7 +303,7 @@ export default function InventoryScreen() {
                 ? undefined
                 : equipment
                   ? 'Trage ein, was dauerhaft im Haushalt lebt — Werkzeug, Geräte, Geschirr — und gib jedem Ding seinen festen Platz.'
-                  : 'Scanne einen Barcode, um euren Bestand aufzubauen.'
+                  : 'Scanne einen Barcode, um euren Bestand aufzubauen — oder trag mit + ein, was schon im Schrank steht. Dafür muss nichts über die Einkaufsliste laufen.'
             }
           />
         }
