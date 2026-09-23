@@ -14,6 +14,7 @@ import {
   useScanIn,
   useSetDefaultLocation,
   useSetQuantity,
+  useUpdateProduct,
 } from '../../features/inventory/hooks';
 import { Alert } from '../../lib/alert';
 import type { ProductKind, ProductRow, ProductUnit } from '../../lib/database.types';
@@ -120,10 +121,12 @@ export default function ManualAddScreen() {
   const scanIn = useScanIn();
   const markOpened = useSetQuantity();
   const setDefaultLocation = useSetDefaultLocation();
+  const updateProduct = useUpdateProduct();
 
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [quantity, setQuantity] = useState('1');
+  const [weightPerPack, setWeightPerPack] = useState('');
   const [unit, setUnit] = useState<ProductUnit>('piece');
   const [locationId, setLocationId] = useState<string | null>(null);
   /** "Die Packung ist schon auf" — stamps opened_at on the lot after booking. */
@@ -149,12 +152,17 @@ export default function ManualAddScreen() {
   // text that cannot be read as a date is worth holding the form for.
   const expiryIso = expiry.trim() ? parseGermanDate(expiry) : null;
   const expiryInvalid = expiry.trim().length > 0 && expiryIso === null;
+  const parsedWeightPerPack = parseQuantity(weightPerPack);
+  const weightInvalid =
+    weightPerPack.trim().length > 0 &&
+    (parsedWeightPerPack === null || parsedWeightPerPack <= 0);
 
   function pickSuggestion(product: ProductRow) {
     setMatched(product);
     setName(product.name);
     if (product.brand) setBrand(product.brand);
     setUnit(product.unit);
+    setWeightPerPack(product.net_quantity ? formatQuantity(product.net_quantity) : '');
   }
 
   function editName(text: string) {
@@ -173,13 +181,14 @@ export default function ManualAddScreen() {
     if (next && quantity === '1') setQuantity(formatQuantity(0.5));
   }
 
-  const canSave = name.trim().length > 0 && !expiryInvalid && !scanIn.isPending;
+  const canSave = name.trim().length > 0 && !expiryInvalid && !weightInvalid && !scanIn.isPending;
 
   async function save() {
     // Fractions are deliberate, not a typo to round away: "0,5" is half a pack
     // you already opened. Anything unreadable falls back to one rather than
     // failing the save on a stray character.
     const parsed = parseQuantity(quantity);
+    const gramsPerPack = !equipment && parsedWeightPerPack && parsedWeightPerPack > 0 ? parsedWeightPerPack : null;
 
     try {
       const item = await scanIn.mutateAsync({
@@ -214,6 +223,13 @@ export default function ManualAddScreen() {
       // Platz on this screen means.
       if (equipment && locationId && locationId !== matched?.default_location_id) {
         await setDefaultLocation.mutateAsync({ productId: item.product_id, locationId });
+      }
+
+      if (!equipment && gramsPerPack !== null && gramsPerPack !== matched?.net_quantity) {
+        await updateProduct.mutateAsync({
+          productId: item.product_id,
+          patch: { net_quantity: gramsPerPack },
+        });
       }
       router.back();
     } catch (err) {
@@ -328,6 +344,14 @@ export default function ManualAddScreen() {
                   : 'Auch angebrochen: 0,5 ist eine halbe Packung.'
               }
             />
+            <TextField
+              label="Gewicht pro Packung (g, optional)"
+              value={weightPerPack}
+              onChangeText={setWeightPerPack}
+              keyboardType="decimal-pad"
+              error={weightInvalid ? 'Bitte eine Zahl größer als 0 eingeben.' : null}
+              hint="Wird mit der Menge multipliziert, damit das Gesamtgewicht automatisch sichtbar ist."
+            />
 
             {/* Only while it is open: on a sealed pack these would invite a
                 fraction that then reads as a full one. */}
@@ -409,7 +433,7 @@ export default function ManualAddScreen() {
           label="Hinzufügen"
           onPress={() => void save()}
           disabled={!canSave}
-          loading={scanIn.isPending || markOpened.isPending}
+          loading={scanIn.isPending || markOpened.isPending || updateProduct.isPending}
           size="lg"
           style={styles.submit}
         />

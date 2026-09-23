@@ -598,6 +598,8 @@ export type InventoryTotalRow = {
   category: string | null;
   image_url: string | null;
   unit: ProductUnit;
+  /** Grams per pack/unit, used to derive total stored weight. */
+  net_quantity: number | null;
   total_quantity: number;
   location_count: number;
   next_expiry: string | null;
