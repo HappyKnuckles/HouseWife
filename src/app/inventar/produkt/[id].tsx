@@ -86,6 +86,8 @@ export default function ProductDetailScreen() {
     name: { ...typography.title, color: c.text },
     meta: { ...typography.caption, color: c.textMuted },
     total: { ...typography.display, fontSize: 28, color: c.text },
+    totalWrap: { alignItems: 'flex-end' as const, gap: 2 },
+    totalMeta: { ...typography.caption, color: c.textMuted },
     sectionTitle: {
       ...typography.micro,
       color: c.textMuted,
@@ -155,6 +157,8 @@ export default function ProductDetailScreen() {
   const [pendingKind, setPendingKind] = useState<ProductKind | null>(null);
   const kind = pendingKind ?? product?.kind ?? 'consumable';
   const equipment = kind === 'equipment';
+  const totalWeightGrams =
+    !equipment && product?.net_quantity ? product.total_quantity * product.net_quantity : null;
   /**
    * The fester Platz, same trick again — but `null` is a real choice here
    * ("noch keiner"), so `undefined` has to carry "no local override" instead.
@@ -417,7 +421,12 @@ export default function ProductDetailScreen() {
                   'Ohne Marke'}
               </Text>
             </View>
-            <Text style={styles.total}>{formatQuantity(product.total_quantity)}</Text>
+            <View style={styles.totalWrap}>
+              <Text style={styles.total}>{formatQuantity(product.total_quantity)}</Text>
+              {totalWeightGrams !== null ? (
+                <Text style={styles.totalMeta}>{formatQuantity(totalWeightGrams)} g gesamt</Text>
+              ) : null}
+            </View>
             <Ionicons name="create-outline" size={18} color={colors.textFaint} />
           </Card>
         )}
