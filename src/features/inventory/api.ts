@@ -31,7 +31,15 @@ export interface LookupResponse {
 export interface InventoryItemWithRefs extends InventoryItemRow {
   products: Pick<
     ProductRow,
-    'id' | 'name' | 'brand' | 'barcode' | 'image_url' | 'unit' | 'kind' | 'default_location_id'
+    | 'id'
+    | 'name'
+    | 'brand'
+    | 'barcode'
+    | 'image_url'
+    | 'unit'
+    | 'net_quantity'
+    | 'kind'
+    | 'default_location_id'
   > | null;
   storage_locations: { id: string; name: string } | null;
 }
@@ -42,7 +50,7 @@ export interface InventoryItemWithRefs extends InventoryItemRow {
  * against to decide whether a tool is at its fester Platz.
  */
 const ITEM_SELECT =
-  '*, products(id, name, brand, barcode, image_url, unit, kind, default_location_id), storage_locations(id, name)';
+  '*, products(id, name, brand, barcode, image_url, unit, net_quantity, kind, default_location_id), storage_locations(id, name)';
 
 export async function fetchInventoryTotals(householdId: string): Promise<InventoryTotalRow[]> {
   const { data, error } = await supabase
@@ -444,7 +452,7 @@ export async function adjustQuantity(
  */
 export async function updateProduct(
   productId: string,
-  patch: Partial<Pick<ProductRow, 'name' | 'brand' | 'unit' | 'category' | 'notes'>>,
+  patch: Partial<Pick<ProductRow, 'name' | 'brand' | 'unit' | 'category' | 'notes' | 'net_quantity'>>,
 ): Promise<ProductRow> {
   const { data, error } = await supabase
     .from('products')
