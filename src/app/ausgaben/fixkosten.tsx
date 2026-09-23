@@ -178,94 +178,104 @@ export default function FixkostenScreen() {
         }
       />
 
-      <Card style={styles.totalCard}>
-        <Text style={styles.totalLabel}>Pro Monat</Text>
-        <Text style={styles.totalValue}>{formatCents(monthlyTotal)}</Text>
-        <Text style={styles.totalHint}>
-          Wird automatisch als Ausgabe gebucht und 50/50 geteilt, sobald sie fällig ist.
-        </Text>
-      </Card>
-
-      {composing ? (
-        <Card style={styles.composer}>
-          <TextField label="Name" value={name} onChangeText={setName} placeholder="z. B. Miete" autoFocus />
-
-          <TextField
-            label="Betrag"
-            value={amount}
-            onChangeText={setAmount}
-            placeholder="0,00"
-            keyboardType="decimal-pad"
-          />
-
-          <View>
-            <Text style={styles.label}>Kategorie</Text>
-            <View style={styles.chipRow}>
-              {EXPENSE_CATEGORIES.map((option) => (
-                <Chip
-                  key={option.value}
-                  label={option.value}
-                  color={option.color}
-                  active={category === option.value}
-                  onPress={() => setCategory((prev) => (prev === option.value ? null : option.value))}
-                />
-              ))}
-            </View>
-          </View>
-
-          <Segmented
-            options={[
-              { value: 'month', label: 'Monatlich' },
-              { value: 'week', label: 'Wöchentlich' },
-            ]}
-            value={unit}
-            onChange={setUnit}
-          />
-
-          {unit === 'month' ? (
-            <View>
-              <Text style={styles.label}>Am welchen Tag?</Text>
-              <View style={styles.chipRow}>
-                {DAY_CHOICES.map((day) => (
-                  <Chip
-                    key={day}
-                    label={`${day}.`}
-                    active={dayOfMonth === day}
-                    onPress={() => setDayOfMonth(day)}
-                  />
-                ))}
-              </View>
-            </View>
-          ) : null}
-
-          <View>
-            <Text style={styles.label}>Wer zahlt?</Text>
-            <View style={styles.chipRow}>
-              {(members ?? []).map((member) => (
-                <Chip
-                  key={member.id}
-                  label={member.display_name}
-                  color={member.color}
-                  active={paidBy === member.id}
-                  onPress={() => setPaidBy(member.id)}
-                />
-              ))}
-            </View>
-          </View>
-
-          <Button
-            label="Fixkosten anlegen"
-            onPress={() => void submit()}
-            disabled={!canSave}
-            loading={createRecurring.isPending}
-          />
-        </Card>
-      ) : null}
-
       <FlatList
         data={recurring ?? []}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <>
+            <Card style={styles.totalCard}>
+              <Text style={styles.totalLabel}>Pro Monat</Text>
+              <Text style={styles.totalValue}>{formatCents(monthlyTotal)}</Text>
+              <Text style={styles.totalHint}>
+                Wird automatisch als Ausgabe gebucht und 50/50 geteilt, sobald sie fällig ist.
+              </Text>
+            </Card>
+
+            {composing ? (
+              <Card style={styles.composer}>
+                <TextField
+                  label="Name"
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="z. B. Miete"
+                  autoFocus
+                />
+
+                <TextField
+                  label="Betrag"
+                  value={amount}
+                  onChangeText={setAmount}
+                  placeholder="0,00"
+                  keyboardType="decimal-pad"
+                />
+
+                <View>
+                  <Text style={styles.label}>Kategorie</Text>
+                  <View style={styles.chipRow}>
+                    {EXPENSE_CATEGORIES.map((option) => (
+                      <Chip
+                        key={option.value}
+                        label={option.value}
+                        color={option.color}
+                        active={category === option.value}
+                        onPress={() => setCategory((prev) => (prev === option.value ? null : option.value))}
+                      />
+                    ))}
+                  </View>
+                </View>
+
+                <Segmented
+                  options={[
+                    { value: 'month', label: 'Monatlich' },
+                    { value: 'week', label: 'Wöchentlich' },
+                  ]}
+                  value={unit}
+                  onChange={setUnit}
+                />
+
+                {unit === 'month' ? (
+                  <View>
+                    <Text style={styles.label}>Am welchen Tag?</Text>
+                    <View style={styles.chipRow}>
+                      {DAY_CHOICES.map((day) => (
+                        <Chip
+                          key={day}
+                          label={`${day}.`}
+                          active={dayOfMonth === day}
+                          onPress={() => setDayOfMonth(day)}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                <View>
+                  <Text style={styles.label}>Wer zahlt?</Text>
+                  <View style={styles.chipRow}>
+                    {(members ?? []).map((member) => (
+                      <Chip
+                        key={member.id}
+                        label={member.display_name}
+                        color={member.color}
+                        active={paidBy === member.id}
+                        onPress={() => setPaidBy(member.id)}
+                      />
+                    ))}
+                  </View>
+                </View>
+
+                <Button
+                  label="Fixkosten anlegen"
+                  onPress={() => void submit()}
+                  disabled={!canSave}
+                  loading={createRecurring.isPending}
+                />
+              </Card>
+            ) : null}
+          </>
+        }
         ListEmptyComponent={
           <EmptyState
             title="Noch keine Fixkosten"
