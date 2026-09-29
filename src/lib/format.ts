@@ -4,6 +4,8 @@
  * place that turns typed text back into cents.
  */
 
+import type { ProductUnit } from './database.types';
+
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
 function currencyFormatter(currency: string): Intl.NumberFormat {
@@ -117,6 +119,34 @@ export function unitLabel(unit: string, quantity = 1): string {
   const [singular, plural] = UNIT_LABELS[unit] ?? [unit, unit];
   return quantity === 1 ? singular : plural;
 }
+
+/**
+ * Every unit a product can be counted in, in the order the pickers offer them:
+ * the two countable ones first, then mass, then volume. Shared so anlegen and
+ * bearbeiten cannot drift apart on either the set or the order.
+ */
+export const UNIT_OPTIONS: { value: ProductUnit; label: string }[] = (
+  ['piece', 'pack', 'g', 'kg', 'ml', 'l'] as const
+).map((value) => ({ value, label: unitLabel(value) }));
+
+/**
+ * Whether a fraction of this unit means "eine davon ist angebrochen".
+ *
+ * For Stück und Packungen it does: 1,5 is one sealed and one half-used. For a
+ * measured unit it does not — 250 g is just 250 g, and whether die Tüte offen
+ * ist is a separate fact the number cannot carry.
+ */
+export const countedInPacks = (unit: string) => unit === 'piece' || unit === 'pack';
+
+/**
+ * The quick MHD offsets, shared by anlegen and bearbeiten. A MHD is months out
+ * far more often than days, so these skip "morgen".
+ */
+export const EXPIRY_CHOICES: { label: string; days: number }[] = [
+  { label: '1 Woche', days: 7 },
+  { label: '1 Monat', days: 30 },
+  { label: '3 Monate', days: 90 },
+];
 
 /** "1½ Packungen", "250 g", "2 Stück". */
 export function formatQuantityWithUnit(quantity: number, unit: string): string {
