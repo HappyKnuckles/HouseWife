@@ -15,6 +15,7 @@ import {
   useLocations,
   useResolveLocationBarcode,
   useScanIn,
+  useUpdateProduct,
 } from '../../features/inventory/hooks';
 import { Alert } from '../../lib/alert';
 import type { LocationPathRow } from '../../lib/database.types';
@@ -28,6 +29,7 @@ interface Draft {
   name: string;
   brand: string | null;
   imageUrl: string | null;
+  netQuantity: number | null;
   provider: string | null;
   origin: 'known' | 'external' | 'unknown';
 }
@@ -122,9 +124,11 @@ export default function ScanScreen() {
   const resolveProduct = useBarcodeResolver();
   const resolveLocation = useResolveLocationBarcode();
   const scanIn = useScanIn();
+  const updateProduct = useUpdateProduct();
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [quantity, setQuantity] = useState('1');
+  const [weightPerPack, setWeightPerPack] = useState('');
   const [locationId, setLocationId] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [activeLocation, setActiveLocation] = useState<LocationPathRow | null>(null);
@@ -166,9 +170,13 @@ export default function ScanScreen() {
             name: result.product.name,
             brand: result.product.brand,
             imageUrl: result.product.image_url,
+            netQuantity: result.product.net_quantity,
             provider: null,
             origin: 'known',
           });
+          setWeightPerPack(
+            result.product.net_quantity ? String(result.product.net_quantity).replace('.', ',') : '',
+          );
           setLocationId(activeLocation?.id ?? result.product.default_location_id ?? null);
         } else if (result.kind === 'external') {
           setDraft({
@@ -176,9 +184,13 @@ export default function ScanScreen() {
             name: result.result.name,
             brand: result.result.brand ?? null,
             imageUrl: result.result.imageUrl ?? null,
+            netQuantity: result.result.netQuantity ?? null,
             provider: result.provider,
             origin: 'external',
           });
+          setWeightPerPack(
+            result.result.netQuantity ? String(result.result.netQuantity).replace('.', ',') : '',
+          );
           setLocationId(activeLocation?.id ?? null);
         } else {
           setDraft({
@@ -186,9 +198,11 @@ export default function ScanScreen() {
             name: '',
             brand: null,
             imageUrl: null,
+            netQuantity: null,
             provider: null,
             origin: 'unknown',
           });
+          setWeightPerPack('');
           setLocationId(activeLocation?.id ?? null);
         }
       } finally {
@@ -200,9 +214,11 @@ export default function ScanScreen() {
 
   async function save() {
     if (!draft) return;
+    const grams = Number(weightPerPack.replace(',', '.'));
+    const gramsPerPack = Number.isFinite(grams) && grams > 0 ? grams : null;
 
     try {
-      await scanIn.mutateAsync({
+      const item = await scanIn.mutateAsync({
         barcode: draft.barcode,
         name: draft.name.trim(),
         brand: draft.brand,
@@ -212,9 +228,17 @@ export default function ScanScreen() {
         externalProvider: draft.provider,
       });
 
+      if (gramsPerPack !== null && gramsPerPack !== draft.netQuantity) {
+        await updateProduct.mutateAsync({
+          productId: item.product_id,
+          patch: { net_quantity: gramsPerPack },
+        });
+      }
+
       setSaved(draft.name.trim());
       setDraft(null);
       setQuantity('1');
+      setWeightPerPack('');
       setCreatingLocation(false);
       setTimeout(() => setSaved(null), 2500);
     } catch (err) {
@@ -240,6 +264,8 @@ export default function ScanScreen() {
   }
 
   const busy = resolveLocation.isPending || resolveProduct.isPending;
+  const parsedWeight = Number(weightPerPack.replace(',', '.'));
+  const weightInvalid = weightPerPack.trim().length > 0 && (!Number.isFinite(parsedWeight) || parsedWeight <= 0);
 
   return (
     <View style={styles.fill}>
@@ -316,6 +342,13 @@ export default function ScanScreen() {
               onChangeText={setQuantity}
               keyboardType="decimal-pad"
             />
+            <TextField
+              label="Gewicht pro Packung (g, optional)"
+              value={weightPerPack}
+              onChangeText={setWeightPerPack}
+              keyboardType="decimal-pad"
+              error={weightInvalid ? 'Bitte eine Zahl größer als 0 eingeben.' : null}
+            />
 
             <View style={styles.field}>
               <Text style={styles.label}>Ort</Text>
@@ -362,6 +395,7 @@ export default function ScanScreen() {
                 variant="secondary"
                 onPress={() => {
                   setDraft(null);
+                  setWeightPerPack('');
                   setCreatingLocation(false);
                 }}
                 style={styles.flex}
@@ -369,8 +403,8 @@ export default function ScanScreen() {
               <Button
                 label="Hinzufügen"
                 onPress={() => void save()}
-                disabled={draft.name.trim().length === 0}
-                loading={scanIn.isPending}
+                disabled={draft.name.trim().length === 0 || weightInvalid}
+                loading={scanIn.isPending || updateProduct.isPending}
                 style={styles.flex}
               />
             </View>

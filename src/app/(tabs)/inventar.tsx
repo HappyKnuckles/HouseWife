@@ -311,6 +311,8 @@ export default function InventoryScreen() {
           const low = lowProductIds.has(item.product_id);
           const expiringSoon =
             item.expires_on && new Date(item.expires_on).getTime() - Date.now() < 7 * 86_400_000;
+          const lotWeightGrams =
+            !equipment && item.products?.net_quantity ? item.quantity * item.products.net_quantity : null;
 
           // Ausstattung: where it should be, versus where it is. A null
           // default_location_id is "noch kein Platz vereinbart", which is not
@@ -370,6 +372,9 @@ export default function InventoryScreen() {
                       {item.storage_locations?.name ?? 'Ohne Ort'}
                       {item.products?.brand ? ` · ${item.products.brand}` : ''}
                       {!equipment && item.opened_at ? ' · angebrochen' : ''}
+                      {!equipment && lotWeightGrams !== null
+                        ? ` · ${formatQuantity(lotWeightGrams)} g`
+                        : ''}
                       {equipment && item.quantity !== 1 ? ` · ${formatQuantity(item.quantity)}×` : ''}
                     </Text>
 

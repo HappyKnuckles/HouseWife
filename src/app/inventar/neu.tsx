@@ -10,15 +10,19 @@ import { Screen } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
 import {
   useLocations,
+  useProductCategories,
   useProductSearch,
   useScanIn,
   useSetDefaultLocation,
   useSetQuantity,
+  useUpdateProduct,
 } from '../../features/inventory/hooks';
 import { Alert } from '../../lib/alert';
 import type { ProductKind, ProductRow, ProductUnit } from '../../lib/database.types';
 import { errorMessage } from '../../lib/errors';
 import {
+  EXPIRY_CHOICES,
+  UNIT_OPTIONS,
   formatDate,
   formatQuantity,
   parseGermanDate,
@@ -29,24 +33,8 @@ import {
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
-const UNIT_OPTIONS: { value: ProductUnit; label: string }[] = [
-  { value: 'piece', label: 'Stück' },
-  { value: 'pack', label: 'Packung' },
-  { value: 'g', label: 'g' },
-  { value: 'kg', label: 'kg' },
-  { value: 'ml', label: 'ml' },
-  { value: 'l', label: 'l' },
-];
-
 /** How much is left in the pack that is already open. Same set as produkt/[id]. */
 const OPEN_FRACTIONS = [0.25, 0.5, 0.75];
-
-/** A MHD is months out far more often than days, so the chips skip "morgen". */
-const EXPIRY_CHOICES: { label: string; days: number }[] = [
-  { label: '1 Woche', days: 7 },
-  { label: '1 Monat', days: 30 },
-  { label: '3 Monate', days: 90 },
-];
 
 const toGerman = (iso: string) => formatDate(iso);
 
@@ -117,13 +105,17 @@ export default function ManualAddScreen() {
     switchHint: { ...typography.caption, color: c.textMuted },
   }));
   const { data: locations } = useLocations();
+  const { data: categories } = useProductCategories();
   const scanIn = useScanIn();
   const markOpened = useSetQuantity();
   const setDefaultLocation = useSetDefaultLocation();
+  const updateProduct = useUpdateProduct();
 
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
   const [quantity, setQuantity] = useState('1');
+  const [weightPerPack, setWeightPerPack] = useState('');
   const [unit, setUnit] = useState<ProductUnit>('piece');
   const [locationId, setLocationId] = useState<string | null>(null);
   /** "Die Packung ist schon auf" — stamps opened_at on the lot after booking. */
@@ -149,12 +141,18 @@ export default function ManualAddScreen() {
   // text that cannot be read as a date is worth holding the form for.
   const expiryIso = expiry.trim() ? parseGermanDate(expiry) : null;
   const expiryInvalid = expiry.trim().length > 0 && expiryIso === null;
+  const parsedWeightPerPack = parseQuantity(weightPerPack);
+  const weightInvalid =
+    weightPerPack.trim().length > 0 &&
+    (parsedWeightPerPack === null || parsedWeightPerPack <= 0);
 
   function pickSuggestion(product: ProductRow) {
     setMatched(product);
     setName(product.name);
     if (product.brand) setBrand(product.brand);
+    if (product.category) setCategory(product.category);
     setUnit(product.unit);
+    setWeightPerPack(product.net_quantity ? formatQuantity(product.net_quantity) : '');
   }
 
   function editName(text: string) {
@@ -173,13 +171,14 @@ export default function ManualAddScreen() {
     if (next && quantity === '1') setQuantity(formatQuantity(0.5));
   }
 
-  const canSave = name.trim().length > 0 && !expiryInvalid && !scanIn.isPending;
+  const canSave = name.trim().length > 0 && !expiryInvalid && !weightInvalid && !scanIn.isPending;
 
   async function save() {
     // Fractions are deliberate, not a typo to round away: "0,5" is half a pack
     // you already opened. Anything unreadable falls back to one rather than
     // failing the save on a stray character.
     const parsed = parseQuantity(quantity);
+    const gramsPerPack = !equipment && parsedWeightPerPack && parsedWeightPerPack > 0 ? parsedWeightPerPack : null;
 
     try {
       const item = await scanIn.mutateAsync({
@@ -214,6 +213,25 @@ export default function ManualAddScreen() {
       // Platz on this screen means.
       if (equipment && locationId && locationId !== matched?.default_location_id) {
         await setDefaultLocation.mutateAsync({ productId: item.product_id, locationId });
+      }
+
+      // inventory_scan_in() carries neither the category nor the grams per
+      // pack, so both are a second write on the catalog row it just resolved —
+      // batched into one patch rather than two round trips.
+      //
+      // Only ever setting, never clearing: an empty field here means "nicht
+      // angegeben", the default state of a fresh form, and must not wipe a
+      // value off a product that already had one.
+      const trimmedCategory = category.trim();
+      const patch: Parameters<typeof updateProduct.mutateAsync>[0]['patch'] = {};
+      if (!equipment && gramsPerPack !== null && gramsPerPack !== matched?.net_quantity) {
+        patch.net_quantity = gramsPerPack;
+      }
+      if (trimmedCategory && trimmedCategory !== (matched?.category ?? '')) {
+        patch.category = trimmedCategory;
+      }
+      if (Object.keys(patch).length > 0) {
+        await updateProduct.mutateAsync({ productId: item.product_id, patch });
       }
       router.back();
     } catch (err) {
@@ -289,6 +307,29 @@ export default function ManualAddScreen() {
           placeholder={equipment ? 'z. B. Bosch' : 'z. B. Aldi'}
         />
 
+        {/* Same chips-then-free-text shape as produkt/[id], so a category is
+            picked the same way whether it is set here or corrected later. */}
+        <Text style={styles.label}>Kategorie (optional)</Text>
+        {(categories ?? []).length > 0 ? (
+          <View style={styles.chipRow}>
+            {(categories ?? []).map((option) => (
+              <Chip
+                key={option}
+                label={option}
+                active={category.trim() === option}
+                // Tapping the active chip clears it — a category is optional.
+                onPress={() => setCategory((prev) => (prev === option ? '' : option))}
+              />
+            ))}
+          </View>
+        ) : null}
+        <TextField
+          value={category}
+          onChangeText={setCategory}
+          placeholder={equipment ? 'z. B. Werkzeug' : 'z. B. Backen'}
+          hint="Frei wählbar. Schon benutzte stehen oben als Chip."
+        />
+
         {/* Ausstattung is counted in Stück by definition, is never angebrochen
             and has no MHD — eine Bohrmaschine in Millilitern, halb aufgebraucht,
             mindestens haltbar bis, is a question nobody has. */}
@@ -327,6 +368,14 @@ export default function ManualAddScreen() {
                   ? 'Was noch da ist: ½ ist die halbe offene Packung, 1½ eine volle und eine halbe.'
                   : 'Auch angebrochen: 0,5 ist eine halbe Packung.'
               }
+            />
+            <TextField
+              label="Gewicht pro Packung (g, optional)"
+              value={weightPerPack}
+              onChangeText={setWeightPerPack}
+              keyboardType="decimal-pad"
+              error={weightInvalid ? 'Bitte eine Zahl größer als 0 eingeben.' : null}
+              hint="Wird mit der Menge multipliziert, damit das Gesamtgewicht automatisch sichtbar ist."
             />
 
             {/* Only while it is open: on a sealed pack these would invite a
@@ -409,7 +458,7 @@ export default function ManualAddScreen() {
           label="Hinzufügen"
           onPress={() => void save()}
           disabled={!canSave}
-          loading={scanIn.isPending || markOpened.isPending}
+          loading={scanIn.isPending || markOpened.isPending || updateProduct.isPending}
           size="lg"
           style={styles.submit}
         />

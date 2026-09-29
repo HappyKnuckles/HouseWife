@@ -35,16 +35,23 @@ import {
   useSetProductKind,
   useSetQuantity,
   useSetRestockThreshold,
+  useUpdateItem,
   useUpdateProduct,
 } from '../../../features/inventory/hooks';
-import type { ProductKind } from '../../../lib/database.types';
+import type { ProductKind, ProductUnit } from '../../../lib/database.types';
 import { Alert } from '../../../lib/alert';
 import { errorMessage } from '../../../lib/errors';
 import {
+  EXPIRY_CHOICES,
+  UNIT_OPTIONS,
+  countedInPacks,
   formatDate,
   formatQuantity,
   formatQuantityWithUnit,
+  parseGermanDate,
   parseQuantity,
+  shiftDays,
+  todayIso,
   unitLabel,
 } from '../../../lib/format';
 import { radius, spacing, typography } from '../../../lib/theme';
@@ -86,6 +93,8 @@ export default function ProductDetailScreen() {
     name: { ...typography.title, color: c.text },
     meta: { ...typography.caption, color: c.textMuted },
     total: { ...typography.display, fontSize: 28, color: c.text },
+    totalWrap: { alignItems: 'flex-end' as const, gap: 2 },
+    totalMeta: { ...typography.caption, color: c.textMuted },
     sectionTitle: {
       ...typography.micro,
       color: c.textMuted,
@@ -122,6 +131,7 @@ export default function ProductDetailScreen() {
     lotQuantity: { ...typography.bodyStrong, color: c.text },
     divider: { height: 1, backgroundColor: c.border },
     empty: { ...typography.caption, color: c.textMuted },
+    unitWarning: { ...typography.caption, color: c.warning },
     editActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
     panel: { gap: spacing.md, paddingBottom: spacing.md },
@@ -136,6 +146,7 @@ export default function ProductDetailScreen() {
   const setKind = useSetProductKind();
   const setDefaultLocation = useSetDefaultLocation();
   const updateProduct = useUpdateProduct();
+  const updateItem = useUpdateItem();
   const moveItem = useMoveItem();
   const setQuantity = useSetQuantity();
   const adjust = useAdjustQuantity();
@@ -155,6 +166,8 @@ export default function ProductDetailScreen() {
   const [pendingKind, setPendingKind] = useState<ProductKind | null>(null);
   const kind = pendingKind ?? product?.kind ?? 'consumable';
   const equipment = kind === 'equipment';
+  const totalWeightGrams =
+    !equipment && product?.net_quantity ? product.total_quantity * product.net_quantity : null;
   /**
    * The fester Platz, same trick again — but `null` is a real choice here
    * ("noch keiner"), so `undefined` has to carry "no local override" instead.
@@ -167,12 +180,17 @@ export default function ProductDetailScreen() {
   const [draftName, setDraftName] = useState('');
   const [draftBrand, setDraftBrand] = useState('');
   const [draftCategory, setDraftCategory] = useState('');
+  const [draftUnit, setDraftUnit] = useState<ProductUnit>('piece');
+  /** Grams per Packung, as typed. Empty means "nicht hinterlegt". */
+  const [draftWeight, setDraftWeight] = useState('');
   /** Which lot's panel is open; null = none. */
   const [openPanel, setOpenPanel] = useState<string | null>(null);
   /** How much of the open lot to move. Empty means all of it. */
   const [moveAmount, setMoveAmount] = useState('');
   /** The exact-stock field, for amounts the quick chips do not cover. */
   const [exactAmount, setExactAmount] = useState('');
+  /** The open lot's MHD as typed, German-style. Empty means "kein MHD". */
+  const [expiryDraft, setExpiryDraft] = useState('');
 
   if (isLoading) return <LoadingState />;
   if (error) return <ErrorState error={error} />;
@@ -204,6 +222,32 @@ export default function ProductDetailScreen() {
   const exact = parseQuantity(exactAmount);
   const exactValid = exact !== null && exact >= 0;
 
+  // Empty is a real answer ("kein Gewicht hinterlegt"); only a number that
+  // cannot be read, or one that is not positive, holds the save.
+  const parsedWeight = parseQuantity(draftWeight);
+  const weightInvalid =
+    draftWeight.trim().length > 0 && (parsedWeight === null || parsedWeight <= 0);
+
+  // An empty field is "kein MHD", a perfectly normal answer — only text that
+  // cannot be read as a date holds the save. Same rule as the Anlegen-Screen.
+  const expiryIso = expiryDraft.trim() ? parseGermanDate(expiryDraft) : null;
+  const expiryInvalid = expiryDraft.trim().length > 0 && expiryIso === null;
+  const expiryChanged = !!openLot && expiryIso !== openLot.expires_on;
+  /**
+   * A lot is keyed by product, Ort *and* MHD, so moving one lot's date onto
+   * another's would collide on inventory_items_lot_unique. Every lot is loaded
+   * here, so the clash can be named before the write instead of coming back as
+   * a raw Postgres 23505.
+   */
+  const expiryTaken =
+    expiryChanged &&
+    (lots ?? []).some(
+      (lot) =>
+        lot.id !== openLot?.id &&
+        lot.location_id === openLot?.location_id &&
+        lot.expires_on === expiryIso,
+    );
+
   function togglePanel(lotId: string, quantity: number) {
     const opening = openPanel !== lotId;
     setOpenPanel(opening ? lotId : null);
@@ -211,6 +255,8 @@ export default function ProductDetailScreen() {
     // field doubles as a reminder of how much is actually there.
     setMoveAmount(opening && quantity > 1 ? formatQuantity(quantity) : '');
     setExactAmount(opening ? formatQuantity(quantity) : '');
+    const lot = (lots ?? []).find((l) => l.id === lotId);
+    setExpiryDraft(opening && lot?.expires_on ? formatDate(lot.expires_on) : '');
   }
 
   function submitMove(lotId: string, locationId: string | null) {
@@ -238,11 +284,49 @@ export default function ProductDetailScreen() {
     setExactAmount(formatQuantity(sealed + fraction));
   }
 
-  function applyExact(lotId: string) {
+  /**
+   * The exact count, with "angebrochen" kept honest by the same rule
+   * setOpenFraction() writes: the fractional part *is* the pack that is open,
+   * so a number without one says there is no open pack any more. Counting 1,5
+   * back up to 2 is zwei volle Packungen, not "zwei, davon eine offen" — the
+   * flag has to go with the fraction that justified it.
+   *
+   * Only where a fraction carries that meaning. In g or ml the amount is just
+   * the amount: 250 says nothing about whether die Tüte offen ist, so there the
+   * flag is left exactly as it was rather than guessed at.
+   */
+  function applyExact(lotId: string, unit: string) {
     const value = parseQuantity(exactAmount);
     if (value === null || value < 0) return;
-    void setQuantity.mutateAsync({ itemId: lotId, quantity: value });
+    void setQuantity.mutateAsync({
+      itemId: lotId,
+      quantity: value,
+      opened: countedInPacks(unit) ? !Number.isInteger(value) : undefined,
+    });
     setOpenPanel(null);
+  }
+
+  /**
+   * Corrects a lot's MHD — the date typed a month out, or the one that was
+   * never entered at all.
+   *
+   * A plain UPDATE rather than an RPC, so unlike a move nothing merges: the
+   * collision is caught by expiryTaken above and the button stays disabled.
+   * The 23505 here is only the race — another phone writing that date first.
+   */
+  async function applyExpiry(lotId: string) {
+    if (expiryInvalid || expiryTaken || !expiryChanged) return;
+    try {
+      await updateItem.mutateAsync({ itemId: lotId, patch: { expires_on: expiryIso } });
+      setOpenPanel(null);
+    } catch (err) {
+      Alert.alert(
+        'MHD konnte nicht geändert werden',
+        (err as { code?: string })?.code === '23505'
+          ? 'An diesem Ort gibt es schon einen Bestand mit diesem MHD. Verschieb den Bestand dorthin, statt das Datum zu ändern.'
+          : errorMessage(err),
+      );
+    }
   }
 
   function applyThreshold(next: number | null) {
@@ -279,16 +363,27 @@ export default function ProductDetailScreen() {
     setDraftName(product?.name ?? '');
     setDraftBrand(product?.brand ?? '');
     setDraftCategory(product?.category ?? '');
+    setDraftUnit(product?.unit ?? 'piece');
+    setDraftWeight(product?.net_quantity ? formatQuantity(product.net_quantity) : '');
     setEditing(true);
   }
 
   async function saveEdits() {
+    if (weightInvalid) return;
     await updateProduct.mutateAsync({
       productId: id,
       patch: {
         name: draftName.trim(),
         brand: draftBrand.trim() || null,
         category: draftCategory.trim() || null,
+        // Ausstattung is counted in Stück and weighs nothing worth recording —
+        // the same rule the Anlegen-Screen applies, so switching Art there and
+        // correcting the unit here cannot end up disagreeing.
+        unit: equipment ? 'piece' : draftUnit,
+        // Unlike on the Anlegen-Screen, an empty field here *is* a deliberate
+        // erasure: it was prefilled with whatever was stored, so clearing it
+        // means "das Gewicht stimmt nicht mehr", not "nicht angegeben".
+        net_quantity: equipment || parsedWeight === null ? null : parsedWeight,
       },
     });
     setEditing(false);
@@ -385,6 +480,49 @@ export default function ProductDetailScreen() {
               hint="Frei wählbar. Schon benutzte stehen oben als Chip."
             />
 
+            {/* Ausstattung wird in Stück gezählt und nicht gewogen. */}
+            {equipment ? null : (
+              <>
+                <Text style={styles.rowHint}>Einheit</Text>
+                <View style={styles.chipRow}>
+                  {UNIT_OPTIONS.map((option) => (
+                    <Chip
+                      key={option.value}
+                      label={option.label}
+                      active={draftUnit === option.value}
+                      onPress={() => setDraftUnit(option.value)}
+                    />
+                  ))}
+                </View>
+                {/* Nothing converts the stored numbers — a lot sitting at 500
+                    stays at 500, it is only read as kg instead of g afterwards.
+                    Converting would be the wrong guess as often as the right
+                    one (the unit is usually wrong *because* the number was
+                    entered for the intended unit all along), so this says what
+                    will happen rather than deciding it for them. */}
+                {draftUnit !== product.unit ? (
+                  <Text style={styles.unitWarning}>
+                    Nur die Einheit ändert sich, die Zahlen bleiben stehen: aus{' '}
+                    {formatQuantityWithUnit(product.total_quantity, product.unit)} wird{' '}
+                    {formatQuantityWithUnit(product.total_quantity, draftUnit)}.
+                  </Text>
+                ) : null}
+
+                <TextField
+                  label="Gewicht pro Packung (g, optional)"
+                  value={draftWeight}
+                  onChangeText={setDraftWeight}
+                  keyboardType="decimal-pad"
+                  error={weightInvalid ? 'Bitte eine Zahl größer als 0 eingeben.' : null}
+                  hint={
+                    parsedWeight && !weightInvalid
+                      ? `${formatQuantity(product.total_quantity)} × ${formatQuantity(parsedWeight)} g = ${formatQuantity(product.total_quantity * parsedWeight)} g gesamt.`
+                      : 'Leer lassen heißt: kein Gesamtgewicht ausrechnen.'
+                  }
+                />
+              </>
+            )}
+
             <View style={styles.editActions}>
               <Button
                 label="Abbrechen"
@@ -395,7 +533,7 @@ export default function ProductDetailScreen() {
               <Button
                 label="Speichern"
                 onPress={() => void saveEdits()}
-                disabled={draftName.trim().length === 0}
+                disabled={draftName.trim().length === 0 || weightInvalid}
                 loading={updateProduct.isPending}
                 style={styles.flex}
               />
@@ -417,7 +555,12 @@ export default function ProductDetailScreen() {
                   'Ohne Marke'}
               </Text>
             </View>
-            <Text style={styles.total}>{formatQuantity(product.total_quantity)}</Text>
+            <View style={styles.totalWrap}>
+              <Text style={styles.total}>{formatQuantity(product.total_quantity)}</Text>
+              {totalWeightGrams !== null ? (
+                <Text style={styles.totalMeta}>{formatQuantity(totalWeightGrams)} g gesamt</Text>
+              ) : null}
+            </View>
             <Ionicons name="create-outline" size={18} color={colors.textFaint} />
           </Card>
         )}
@@ -600,18 +743,71 @@ export default function ProductDetailScreen() {
                           keyboardType="decimal-pad"
                           selectTextOnFocus
                           returnKeyType="done"
-                          onSubmitEditing={() => applyExact(lot.id)}
+                          onSubmitEditing={() => applyExact(lot.id, lot.unit)}
                           error={exactValid ? null : 'Bitte eine Menge eingeben.'}
                         />
                       </View>
                       <Button
                         label="Übernehmen"
                         variant="secondary"
-                        onPress={() => applyExact(lot.id)}
+                        onPress={() => applyExact(lot.id, lot.unit)}
                         disabled={!exactValid || exact === lot.quantity}
                         loading={setQuantity.isPending}
                       />
                     </View>
+
+                    {/* Eine Bohrmaschine hat kein MHD. */}
+                    {equipment ? null : (
+                      <>
+                        <View style={styles.inline}>
+                          <View style={styles.flex}>
+                            <TextField
+                              label="MHD"
+                              value={expiryDraft}
+                              onChangeText={setExpiryDraft}
+                              placeholder="TT.MM.JJJJ"
+                              keyboardType="numbers-and-punctuation"
+                              returnKeyType="done"
+                              onSubmitEditing={() => void applyExpiry(lot.id)}
+                              error={
+                                expiryInvalid
+                                  ? 'Bitte als TT.MM.JJJJ eingeben.'
+                                  : expiryTaken
+                                    ? 'An diesem Ort gibt es dafür schon einen Bestand.'
+                                    : null
+                              }
+                            />
+                          </View>
+                          <Button
+                            label="Übernehmen"
+                            variant="secondary"
+                            onPress={() => void applyExpiry(lot.id)}
+                            disabled={!expiryChanged || expiryInvalid || expiryTaken}
+                            loading={updateItem.isPending}
+                          />
+                        </View>
+                        <View style={styles.chipRow}>
+                          {EXPIRY_CHOICES.map((choice) => (
+                            <Chip
+                              key={choice.days}
+                              label={choice.label}
+                              active={!!expiryIso && expiryIso === shiftDays(todayIso(), choice.days)}
+                              onPress={() =>
+                                setExpiryDraft(formatDate(shiftDays(todayIso(), choice.days)))
+                              }
+                            />
+                          ))}
+                          {expiryDraft.trim() ? (
+                            <Chip label="Kein MHD" onPress={() => setExpiryDraft('')} />
+                          ) : null}
+                        </View>
+                        {/* Below the chips rather than as the field's `hint`:
+                            styles.inline aligns on flex-end, so a third line
+                            inside the TextField pushes Übernehmen down past the
+                            input it belongs to. */}
+                        <Text style={styles.rowHint}>Leer lassen heißt: kein MHD.</Text>
+                      </>
+                    )}
 
                     <View style={styles.divider} />
 
