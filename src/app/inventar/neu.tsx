@@ -10,6 +10,7 @@ import { Screen } from '../../components/Screen';
 import { TextField } from '../../components/TextField';
 import {
   useLocations,
+  useProductCategories,
   useProductSearch,
   useScanIn,
   useSetDefaultLocation,
@@ -20,6 +21,8 @@ import { Alert } from '../../lib/alert';
 import type { ProductKind, ProductRow, ProductUnit } from '../../lib/database.types';
 import { errorMessage } from '../../lib/errors';
 import {
+  EXPIRY_CHOICES,
+  UNIT_OPTIONS,
   formatDate,
   formatQuantity,
   parseGermanDate,
@@ -30,24 +33,8 @@ import {
 import { radius, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
-const UNIT_OPTIONS: { value: ProductUnit; label: string }[] = [
-  { value: 'piece', label: 'Stück' },
-  { value: 'pack', label: 'Packung' },
-  { value: 'g', label: 'g' },
-  { value: 'kg', label: 'kg' },
-  { value: 'ml', label: 'ml' },
-  { value: 'l', label: 'l' },
-];
-
 /** How much is left in the pack that is already open. Same set as produkt/[id]. */
 const OPEN_FRACTIONS = [0.25, 0.5, 0.75];
-
-/** A MHD is months out far more often than days, so the chips skip "morgen". */
-const EXPIRY_CHOICES: { label: string; days: number }[] = [
-  { label: '1 Woche', days: 7 },
-  { label: '1 Monat', days: 30 },
-  { label: '3 Monate', days: 90 },
-];
 
 const toGerman = (iso: string) => formatDate(iso);
 
@@ -118,6 +105,7 @@ export default function ManualAddScreen() {
     switchHint: { ...typography.caption, color: c.textMuted },
   }));
   const { data: locations } = useLocations();
+  const { data: categories } = useProductCategories();
   const scanIn = useScanIn();
   const markOpened = useSetQuantity();
   const setDefaultLocation = useSetDefaultLocation();
@@ -125,6 +113,7 @@ export default function ManualAddScreen() {
 
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [weightPerPack, setWeightPerPack] = useState('');
   const [unit, setUnit] = useState<ProductUnit>('piece');
@@ -161,6 +150,7 @@ export default function ManualAddScreen() {
     setMatched(product);
     setName(product.name);
     if (product.brand) setBrand(product.brand);
+    if (product.category) setCategory(product.category);
     setUnit(product.unit);
     setWeightPerPack(product.net_quantity ? formatQuantity(product.net_quantity) : '');
   }
@@ -225,11 +215,23 @@ export default function ManualAddScreen() {
         await setDefaultLocation.mutateAsync({ productId: item.product_id, locationId });
       }
 
+      // inventory_scan_in() carries neither the category nor the grams per
+      // pack, so both are a second write on the catalog row it just resolved —
+      // batched into one patch rather than two round trips.
+      //
+      // Only ever setting, never clearing: an empty field here means "nicht
+      // angegeben", the default state of a fresh form, and must not wipe a
+      // value off a product that already had one.
+      const trimmedCategory = category.trim();
+      const patch: Parameters<typeof updateProduct.mutateAsync>[0]['patch'] = {};
       if (!equipment && gramsPerPack !== null && gramsPerPack !== matched?.net_quantity) {
-        await updateProduct.mutateAsync({
-          productId: item.product_id,
-          patch: { net_quantity: gramsPerPack },
-        });
+        patch.net_quantity = gramsPerPack;
+      }
+      if (trimmedCategory && trimmedCategory !== (matched?.category ?? '')) {
+        patch.category = trimmedCategory;
+      }
+      if (Object.keys(patch).length > 0) {
+        await updateProduct.mutateAsync({ productId: item.product_id, patch });
       }
       router.back();
     } catch (err) {
@@ -303,6 +305,29 @@ export default function ManualAddScreen() {
           value={brand}
           onChangeText={setBrand}
           placeholder={equipment ? 'z. B. Bosch' : 'z. B. Aldi'}
+        />
+
+        {/* Same chips-then-free-text shape as produkt/[id], so a category is
+            picked the same way whether it is set here or corrected later. */}
+        <Text style={styles.label}>Kategorie (optional)</Text>
+        {(categories ?? []).length > 0 ? (
+          <View style={styles.chipRow}>
+            {(categories ?? []).map((option) => (
+              <Chip
+                key={option}
+                label={option}
+                active={category.trim() === option}
+                // Tapping the active chip clears it — a category is optional.
+                onPress={() => setCategory((prev) => (prev === option ? '' : option))}
+              />
+            ))}
+          </View>
+        ) : null}
+        <TextField
+          value={category}
+          onChangeText={setCategory}
+          placeholder={equipment ? 'z. B. Werkzeug' : 'z. B. Backen'}
+          hint="Frei wählbar. Schon benutzte stehen oben als Chip."
         />
 
         {/* Ausstattung is counted in Stück by definition, is never angebrochen
