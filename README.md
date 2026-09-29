@@ -366,8 +366,41 @@ split rules, RLS enforcement, recurrence and rotation, and the inventory scan fl
 
 ```bash
 npm run test:db
-# 146 passed, 0 failed
+# 158 passed, 0 failed
 ```
+
+### Trying a migration before it touches the real project
+
+`npm run test:db` covers the SQL, but it is only Postgres — no PostgREST, no Auth, no
+Realtime — so the *app* cannot talk to it. When a change adds a column or an RPC
+signature the app reads, you want to click through the real screens before pushing
+anything. `supabase start` runs the whole stack in Docker and applies every file in
+`supabase/migrations/` to a fresh local database:
+
+```bash
+npm run db:local     # start the stack, apply migrations, seed the two test users
+npm run env:local    # point the app at the container instead of the real project
+npm start            # or: npm run start:local, which does both
+```
+
+Note that `dev` and `prod` are **not** an equivalent of this: both point at the same
+Supabase project and only swap which two users sign in. `local` is the only profile
+that redirects the database, and the only one where an unpushed migration exists.
+
+While iterating on a migration, `db:reset` is the command that matters — it drops and
+rebuilds from zero, so you find out whether the file applies to a *virgin* database
+rather than only to yours. That is the failure mode that bites on `db push`:
+
+```bash
+npm run db:reset     # wipe, re-apply every migration, re-seed
+npm run db:stop      # shut the containers down again
+```
+
+Studio is on <http://127.0.0.1:54323> for poking at the data by hand. A phone on the
+same Wi-Fi cannot reach `127.0.0.1` — for a real device, swap the host in
+`EXPO_PUBLIC_SUPABASE_URL` in `.env.local` for your machine's LAN IP.
+
+Once it behaves, `npx supabase db push` sends the same migrations to the real project.
 
 **The cron:** the app shows it under **Mehr → Server-Status**. Or query it directly:
 

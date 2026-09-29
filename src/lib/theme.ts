@@ -113,6 +113,10 @@ export const lightColors = {
   successSoft: '#D1FAE5',
   danger: '#DC2626',
   warning: '#D97706',
+  // Amber rather than the dueToday orange: "liegt nicht an seinem Platz" and
+  // "muss nachgekauft werden" appear on the same screen, and two shades of the
+  // same orange would read as one urgency with two wordings.
+  warningSoft: '#FEF3C7',
 } as const;
 
 export const darkColors: ThemeColors = {
@@ -149,6 +153,7 @@ export const darkColors: ThemeColors = {
   successSoft: '#123027',
   danger: '#F87171',
   warning: '#FBBF24',
+  warningSoft: '#3A2E12',
 };
 
 // Widened to `string` per key rather than `typeof lightColors` directly: the
@@ -211,6 +216,41 @@ export const shadow = {
     elevation: 2,
   },
 } as const;
+
+// ---------------------------------------------------------------------------
+// Person colors
+// ---------------------------------------------------------------------------
+
+/**
+ * What a person can pick as their color, in Einstellungen.
+ *
+ * Not tied to the accent, and not derived from anything: this is the one part
+ * of the palette that answers "who", not "what kind of thing", so it has to
+ * stay put when the accent changes. Your partner's avatar turning orange
+ * because you fancied an orange app would be the opposite of what the color is
+ * for.
+ *
+ * All mid-to-dark on purpose. <Avatar> always draws its initials in white —
+ * the circle is a saturated background in either theme — so a pastel here
+ * would be unreadable at 22pt on the Putzplan.
+ *
+ * None of these is the schema default (#4F8DF7), so "has this person ever
+ * chosen?" stays answerable.
+ */
+export const PROFILE_COLORS = [
+  '#E11D48',
+  '#EA580C',
+  '#D97706',
+  '#65A30D',
+  '#059669',
+  '#0D9488',
+  '#0891B2',
+  '#2563EB',
+  '#7C3AED',
+  '#C026D3',
+  '#DB2777',
+  '#475569',
+] as const;
 
 /** Derived from the active palette, so it repaints along with everything else. */
 export function getStatusColor(

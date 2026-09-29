@@ -1,13 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, RefreshControl, Text, View } from 'react-native';
+// Gesture-handler's Pressable, not React Native's — see the comment in
+// components/Card.tsx. Rows here sit inside a SwipeRow.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/Card';
 import { Chip } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup, type SwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import { useMemberMap, useMembers } from '../../features/household/hooks';
 import {
@@ -19,30 +23,44 @@ import {
   useUpdateTodo,
 } from '../../features/todos/hooks';
 import { Alert } from '../../lib/alert';
+import type { TodoRow as TodoRowData } from '../../lib/database.types';
 import { errorMessage } from '../../lib/errors';
-import { radius, shadow, spacing, typography } from '../../lib/theme';
+import { radius, shadow, spacing, type ThemeColors, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
+import { usePressDim } from '../../lib/usePressDim';
 
-export default function TodosScreen() {
-  const { colors } = useAppTheme();
-  const styles = useThemedStyles((c) => ({
+function todosStyles(c: ThemeColors) {
+  return {
     clear: { ...typography.caption, color: c.primary },
     composer: { paddingHorizontal: spacing.lg, gap: spacing.sm, paddingBottom: spacing.md },
     chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
     list: { paddingBottom: spacing.xxl * 2 },
+    // The shadow lives out here rather than on `row`: SwipeRow clips its own
+    // bounds to hide the delete action off-screen, and overflow: hidden on an
+    // ancestor clips a shadow drawn inside it just the same as it clips
+    // content. `swipeContainer` only carries the matching border radius, so
+    // the revealed action's corners line up with the card peeking out from
+    // behind it.
+    rowWrap: {
+      marginHorizontal: spacing.lg,
+      marginBottom: spacing.sm,
+      borderRadius: radius.md,
+      ...shadow.card,
+    },
+    swipeContainer: { borderRadius: radius.md },
     row: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: spacing.md,
       backgroundColor: c.surface,
       borderRadius: radius.md,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
-      ...shadow.card,
     },
+    // Fading `row` itself let the swipe action's color bleed through a done
+    // item's card even before swiping (an opaque background stops being
+    // opaque at 55%) — so the fade lives on the content instead, and `row`
+    // stays a solid card no matter what sits behind it.
+    rowContent: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing.md },
     rowDone: { opacity: 0.55 },
+    rowPressed: { opacity: 0.7 },
     checkbox: {
       width: 24,
       height: 24,
@@ -60,7 +78,12 @@ export default function TodosScreen() {
     rowMeta: { ...typography.caption, color: c.textFaint },
     composerActions: { flexDirection: 'row' as const, gap: spacing.md },
     flex: { flex: 1 },
-  }));
+  };
+}
+
+export default function TodosScreen() {
+  const { colors } = useAppTheme();
+  const styles = useThemedStyles(todosStyles);
   const { data: todos, isLoading, isRefetching, refetch, error } = useTodos('todo');
   const { data: members } = useMembers();
   const memberMap = useMemberMap();
@@ -70,6 +93,7 @@ export default function TodosScreen() {
   const toggleTodo = useToggleTodo('todo');
   const deleteTodo = useDeleteTodo('todo');
   const clearCompleted = useClearCompleted('todo');
+  const swipeGroup = useSwipeRowGroup();
 
   const [title, setTitle] = useState('');
   const [assignee, setAssignee] = useState<string | null>(null);
@@ -109,6 +133,13 @@ export default function TodosScreen() {
     setEditingId(null);
     setTitle('');
     setAssignee(null);
+  }
+
+  function confirmDelete(id: string, title: string) {
+    Alert.alert(`${title} löschen?`, 'Das lässt sich nicht rückgängig machen.', [
+      { text: 'Abbrechen', style: 'cancel' },
+      { text: 'Löschen', style: 'destructive', onPress: () => void deleteTodo.mutateAsync(id) },
+    ]);
   }
 
   return (
@@ -169,55 +200,105 @@ export default function TodosScreen() {
         ListEmptyComponent={
           <EmptyState title="Alles erledigt" body="Neue Aufgaben landen hier — bei euch beiden sofort." />
         }
-        renderItem={({ item }) => {
-          const person = item.assignee_id ? memberMap[item.assignee_id] : null;
-
-          return (
-            <View
-              style={[
-                styles.row,
-                item.is_done && styles.rowDone,
-                editingId === item.id && styles.rowEditing,
-              ]}
-            >
-              <Pressable
-                onPress={() => {
-                  void Haptics.selectionAsync();
-                  void toggleTodo.mutateAsync({ id: item.id, isDone: !item.is_done });
-                }}
-                hitSlop={8}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: item.is_done }}
-                style={[styles.checkbox, item.is_done && styles.checkboxDone]}
-              >
-                {item.is_done ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
-              </Pressable>
-
-              <Pressable
-                onPress={() => startEditing(item)}
-                style={styles.rowText}
-                accessibilityRole="button"
-                accessibilityLabel={`${item.title} bearbeiten`}
-              >
-                <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
-                  {item.title}
-                </Text>
-                {person ? <Text style={styles.rowMeta}>für {person.display_name}</Text> : null}
-              </Pressable>
-
-              {person ? <Avatar name={person.display_name} color={person.color} size={24} /> : null}
-
-              <Pressable
-                onPress={() => void deleteTodo.mutateAsync(item.id)}
-                hitSlop={8}
-                accessibilityLabel={`${item.title} löschen`}
-              >
-                <Ionicons name="trash-outline" size={18} color={colors.textFaint} />
-              </Pressable>
-            </View>
-          );
-        }}
+        renderItem={({ item }) => (
+          <TodoRow
+            item={item}
+            person={item.assignee_id ? memberMap[item.assignee_id] : null}
+            editing={editingId === item.id}
+            swipeGroup={swipeGroup}
+            styles={styles}
+            onToggle={() => {
+              void Haptics.selectionAsync();
+              void toggleTodo.mutateAsync({ id: item.id, isDone: !item.is_done });
+            }}
+            onEdit={() => startEditing(item)}
+            onDelete={() => confirmDelete(item.id, item.title)}
+          />
+        )}
       />
     </Screen>
+  );
+}
+
+/**
+ * Its own component, not inline in `renderItem`: the delayed press-dim
+ * below needs `usePressDim()`, and a hook only gets its own slot of state
+ * when it is called from a real per-row component instance — a plain
+ * function invoked by FlatList's `renderItem` for every row shares none of
+ * that, so this is the same extraction TaskCard already needed.
+ */
+function TodoRow({
+  item,
+  person,
+  editing,
+  swipeGroup,
+  styles,
+  onToggle,
+  onEdit,
+  onDelete,
+}: {
+  item: TodoRowData;
+  person: { display_name: string; color: string } | null;
+  editing: boolean;
+  swipeGroup: SwipeRowGroup;
+  styles: ReturnType<typeof todosStyles>;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { colors } = useAppTheme();
+  // Not Pressable's own `pressed` render-prop: this row sits inside a
+  // SwipeRow, and that fires the instant a finger lands — including the
+  // first moment of a swipe drag — see the comment on usePressDim.
+  const editPress = usePressDim();
+
+  return (
+    <View style={styles.rowWrap}>
+      <SwipeRow
+        id={item.id}
+        group={swipeGroup}
+        containerStyle={styles.swipeContainer}
+        rightActions={[
+          {
+            key: 'delete',
+            icon: 'trash-outline',
+            label: 'Löschen',
+            tone: 'danger',
+            accessibilityLabel: `${item.title} löschen`,
+            onPress: onDelete,
+          },
+        ]}
+      >
+        <View style={[styles.row, editing && styles.rowEditing]}>
+          <View style={[styles.rowContent, item.is_done && styles.rowDone]}>
+            <Pressable
+              onPress={onToggle}
+              hitSlop={8}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: item.is_done }}
+              style={[styles.checkbox, item.is_done && styles.checkboxDone]}
+            >
+              {item.is_done ? <Ionicons name="checkmark" size={16} color={colors.textInverse} /> : null}
+            </Pressable>
+
+            <Pressable
+              onPress={onEdit}
+              onPressIn={editPress.onPressIn}
+              onPressOut={editPress.onPressOut}
+              style={[styles.rowText, editPress.pressed && styles.rowPressed]}
+              accessibilityRole="button"
+              accessibilityLabel={`${item.title} bearbeiten`}
+            >
+              <Text style={[styles.rowTitle, item.is_done && styles.rowTitleDone]} numberOfLines={2}>
+                {item.title}
+              </Text>
+              {person ? <Text style={styles.rowMeta}>für {person.display_name}</Text> : null}
+            </Pressable>
+
+            {person ? <Avatar name={person.display_name} color={person.color} size={24} /> : null}
+          </View>
+        </View>
+      </SwipeRow>
+    </View>
   );
 }

@@ -488,6 +488,75 @@ err = await asExpectError(USER_A, `update public.todos set list='todo'
                                    where source='restock' and not is_done`);
 ok('a restock row cannot be moved off the Einkaufsliste', err !== null, 'the check let it through');
 
+section('inventory: Vorräte vs. Ausstattung');
+// Everything created before 0032 — and everything created without saying — is
+// a Vorrat, so the whole section above kept meaning what it meant.
+r = await as(USER_A, `select count(*)::int n from public.products where kind <> 'consumable'`);
+ok('every pre-existing product is a Vorrat', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+await as(USER_A, `select * from public.inventory_scan_in(
+                    null, 'Akkuschrauber', '${LOC}', 1, 'piece', null, null, null, null, null, 'equipment')`);
+r = await as(USER_A, `select id, kind, default_location_id from public.products where name='Akkuschrauber'`);
+const DRILL = r.rows[0].id;
+ok('p_kind creates an Ausstattung entry', r.rows[0].kind === 'equipment', JSON.stringify(r.rows[0]));
+ok('...and the Ort it was added at becomes its fester Platz',
+   r.rows[0].default_location_id === LOC, JSON.stringify(r.rows[0]));
+
+// The reason the split exists at all: a tool must never reach the Einkaufsliste
+// through the low-stock path.
+err = await asExpectError(USER_A, `update public.products set restock_min_quantity = 1 where id='${DRILL}'`);
+ok('Ausstattung cannot be given a Nachkauf-Grenze', err !== null, 'the check let it through');
+
+r = await as(USER_A, `select is_low, is_misplaced from public.v_inventory_totals where product_id='${DRILL}'`);
+ok('an item at its fester Platz is not misplaced',
+   r.rows[0].is_low === false && r.rows[0].is_misplaced === false, JSON.stringify(r.rows[0]));
+
+r = await as(USER_A, `select id from public.inventory_items where product_id='${DRILL}'`);
+await as(USER_A, `select * from public.inventory_move('${r.rows[0].id}', '${FRIDGE}')`);
+r = await as(USER_A, `select is_misplaced from public.v_inventory_totals where product_id='${DRILL}'`);
+ok('moving it somewhere else flags it as misplaced', r.rows[0].is_misplaced === true, JSON.stringify(r.rows[0]));
+
+// "Noch kein Platz vereinbart" is not the same as "am falschen Platz" — a tool
+// nobody has assigned a home to must not nag.
+await as(USER_A, `update public.products set default_location_id = null where id='${DRILL}'`);
+r = await as(USER_A, `select is_misplaced from public.v_inventory_totals where product_id='${DRILL}'`);
+ok('without a fester Platz nothing is misplaced', r.rows[0].is_misplaced === false, JSON.stringify(r.rows[0]));
+
+// A named kind narrows the name match, so the two "Batterien" stay two things.
+await as(USER_A, `select * from public.inventory_scan_in(
+                    null, 'Batterien', '${LOC}', 4, 'piece', null, null, null, null, null, 'consumable')`);
+await as(USER_A, `select * from public.inventory_scan_in(
+                    null, 'Batterien', '${LOC}', 1, 'piece', null, null, null, null, null, 'equipment')`);
+r = await as(USER_A, `select kind from public.products where name='Batterien' order by kind`);
+ok('the same name in both kinds stays two catalog entries',
+   r.rows.length === 2 && r.rows[0].kind === 'consumable' && r.rows[1].kind === 'equipment',
+   JSON.stringify(r.rows));
+
+// ...but a caller that cannot classify (the Einkauf checkout booking in a
+// hand-written row) must still land on something rather than fork a third.
+await as(USER_A, `select * from public.inventory_scan_in(null, 'Akkuschrauber', '${LOC}', 1)`);
+r = await as(USER_A, `select count(*)::int n from public.products where name='Akkuschrauber'`);
+ok('an unclassified add still matches an existing Ausstattung', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+// Reclassifying a staple has to take its Einkaufsliste row with it. "Mehl" is
+// still low with a threshold of 20 from the section above.
+r = await as(USER_A, `select id from public.products where lower(name)='mehl' and barcode is null`);
+const FLOUR = r.rows[0].id;
+r = await as(USER_A, `select count(*)::int n from public.todos
+                    where source='restock' and not is_done and product_id='${FLOUR}'`);
+ok('the staple is on the Einkaufsliste to begin with', r.rows[0].n === 1, `got ${r.rows[0].n}`);
+
+await as(USER_A, `update public.products set kind='equipment', restock_min_quantity=null where id='${FLOUR}'`);
+r = await as(USER_A, `select count(*)::int n from public.todos
+                    where source='restock' and not is_done and product_id='${FLOUR}'`);
+ok('switching it to Ausstattung clears its Einkaufsliste row', r.rows[0].n === 0, `got ${r.rows[0].n}`);
+
+r = await as(USER_A, `select is_low from public.v_inventory_totals where product_id='${FLOUR}'`);
+ok('...and it can no longer read as low', r.rows[0].is_low === false, JSON.stringify(r.rows[0]));
+
+// Put it back so the sections below still see the Vorrat they were written for.
+await as(USER_A, `update public.products set kind='consumable' where id='${FLOUR}'`);
+
 section('inventory: angebrochene Packungen');
 await as(USER_A, `select * from public.inventory_scan_in(null, 'Zucker', '${LOC}', 2)`);
 r = await as(USER_A, `select i.id from public.inventory_items i

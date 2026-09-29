@@ -6,6 +6,7 @@ import { Button } from '../../components/Button';
 import { Card, EmptyState } from '../../components/Card';
 import { Chip, Segmented } from '../../components/Segmented';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { SwipeRow, useSwipeRowGroup } from '../../components/SwipeRow';
 import { TextField } from '../../components/TextField';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { EXPENSE_CATEGORIES, categoryMeta } from '../../features/expenses/categories';
@@ -62,12 +63,15 @@ export default function FixkostenScreen() {
     label: { ...typography.captionStrong, color: c.textMuted },
     chipRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: spacing.sm },
     list: { paddingTop: spacing.md, paddingBottom: spacing.xxl * 2 },
+    // Card draws its own shadow (see components/Card.tsx), which SwipeRow
+    // would clip along with the delete action it hides — so the margin and
+    // matching radius sit on SwipeRow's container, outside that clip.
+    rowWrap: { marginHorizontal: spacing.lg, marginBottom: spacing.sm, borderRadius: radius.lg },
+    swipeContainer: { borderRadius: radius.lg },
     row: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: spacing.md,
-      marginHorizontal: spacing.lg,
-      marginBottom: spacing.sm,
       paddingVertical: spacing.md,
     },
     rowIcon: {
@@ -89,6 +93,7 @@ export default function FixkostenScreen() {
   const createRecurring = useCreateRecurringExpense();
   const setActive = useSetRecurringExpenseActive();
   const deleteRecurring = useDeleteRecurringExpense();
+  const swipeGroup = useSwipeRowGroup();
 
   const [composing, setComposing] = useState(false);
   const [name, setName] = useState('');
@@ -270,30 +275,45 @@ export default function FixkostenScreen() {
         renderItem={({ item }) => {
           const meta = categoryMeta(item.category);
           return (
-            <Card
-              style={[styles.row, !item.is_active && styles.inactive]}
-              onPress={() => confirmDelete(item.id, item.name)}
-            >
-              <View style={[styles.rowIcon, { backgroundColor: meta.color + '1F' }]}>
-                <Ionicons name={meta.icon} size={18} color={meta.color} />
-              </View>
+            <View style={styles.rowWrap}>
+              <SwipeRow
+                id={item.id}
+                group={swipeGroup}
+                containerStyle={styles.swipeContainer}
+                rightActions={[
+                  {
+                    key: 'delete',
+                    icon: 'trash-outline',
+                    label: 'Löschen',
+                    tone: 'danger',
+                    accessibilityLabel: `${item.name} löschen`,
+                    onPress: () => confirmDelete(item.id, item.name),
+                  },
+                ]}
+              >
+                <Card style={[styles.row, !item.is_active && styles.inactive]}>
+                  <View style={[styles.rowIcon, { backgroundColor: meta.color + '1F' }]}>
+                    <Ionicons name={meta.icon} size={18} color={meta.color} />
+                  </View>
 
-              <View style={styles.rowText}>
-                <Text style={styles.rowName}>{item.name}</Text>
-                <Text style={styles.rowMeta}>
-                  {scheduleLabel(item.recurrence_unit, item.recurrence_interval, item.day_of_month)}
-                  {item.is_active ? ` · nächste am ${formatDate(item.next_due_on)}` : ' · pausiert'}
-                </Text>
-              </View>
+                  <View style={styles.rowText}>
+                    <Text style={styles.rowName}>{item.name}</Text>
+                    <Text style={styles.rowMeta}>
+                      {scheduleLabel(item.recurrence_unit, item.recurrence_interval, item.day_of_month)}
+                      {item.is_active ? ` · nächste am ${formatDate(item.next_due_on)}` : ' · pausiert'}
+                    </Text>
+                  </View>
 
-              <Text style={styles.rowAmount}>{formatCents(item.amount_cents, item.currency)}</Text>
+                  <Text style={styles.rowAmount}>{formatCents(item.amount_cents, item.currency)}</Text>
 
-              <Switch
-                value={item.is_active}
-                onValueChange={(value) => void setActive.mutateAsync({ id: item.id, isActive: value })}
-                trackColor={{ true: colors.primary }}
-              />
-            </Card>
+                  <Switch
+                    value={item.is_active}
+                    onValueChange={(value) => void setActive.mutateAsync({ id: item.id, isActive: value })}
+                    trackColor={{ true: colors.primary }}
+                  />
+                </Card>
+              </SwipeRow>
+            </View>
           );
         }}
       />

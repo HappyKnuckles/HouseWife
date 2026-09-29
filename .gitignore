@@ -59,3 +59,8 @@ env-profiles/*.env
 # generated native folders
 /ios
 /android
+
+# local Supabase stack state (supabase start / db reset). Machine-local — the
+# migrations are the shared artifact, this is just the container's bookkeeping.
+supabase/.branches/
+supabase/.temp/

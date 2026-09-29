@@ -1,8 +1,16 @@
 import type { ReactNode } from 'react';
-import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
+// Gesture-handler's own Pressable, not React Native's: a Card can end up
+// nested inside a SwipeRow (see components/SwipeRow.tsx), and RN's Pressable
+// uses the legacy JS responder system, which does not know to back off when
+// a sibling gesture-handler Pan gesture (the swipe) claims the touch — a
+// swipe would fire onPress too. Gesture-handler's Pressable arbitrates on the
+// same native gesture system as the Pan, so it loses correctly instead.
+import { Pressable } from 'react-native-gesture-handler';
 
 import { radius, shadow, spacing, typography } from '../lib/theme';
 import { useThemedStyles } from '../lib/theme-context';
+import { usePressDim } from '../lib/usePressDim';
 
 export function Card({
   children,
@@ -22,12 +30,18 @@ export function Card({
     },
     pressed: { opacity: 0.85 },
   }));
+  // Not Pressable's own `pressed` render-prop: that fires the instant a
+  // finger lands, including the first moment of a swipe drag if this Card
+  // sits inside a SwipeRow — see the comment on usePressDim.
+  const { pressed, onPressIn, onPressOut } = usePressDim();
 
   if (onPress) {
     return (
       <Pressable
         onPress={onPress}
-        style={({ pressed }) => [styles.card, pressed && styles.pressed, style]}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        style={[styles.card, pressed && styles.pressed, style]}
       >
         {children}
       </Pressable>

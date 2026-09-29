@@ -5,10 +5,13 @@ import { Pressable, RefreshControl, SectionList, Text, View } from 'react-native
 
 import { EmptyState } from '../../components/Card';
 import { ErrorState, LoadingState, Screen, ScreenHeader } from '../../components/Screen';
+import { useSwipeRowGroup } from '../../components/SwipeRow';
 import { fetchLatestCompletion } from '../../features/cleaning/api';
 import { TaskCard } from '../../features/cleaning/components/TaskCard';
-import { useAgenda, useCompleteTask, useUndoCompletion } from '../../features/cleaning/hooks';
+import { useAgenda, useCompleteTask, useDeleteTask, useUndoCompletion } from '../../features/cleaning/hooks';
+import { Alert } from '../../lib/alert';
 import type { CleaningAgendaRow } from '../../lib/database.types';
+import { errorMessage } from '../../lib/errors';
 import { getStatusColor, radius, shadow, spacing, typography } from '../../lib/theme';
 import { useAppTheme, useThemedStyles } from '../../lib/theme-context';
 
@@ -63,6 +66,8 @@ export default function PutzplanScreen() {
   const { data, isLoading, isRefetching, refetch, error } = useAgenda();
   const completeTask = useCompleteTask();
   const undoCompletion = useUndoCompletion();
+  const deleteTask = useDeleteTask();
+  const swipeGroup = useSwipeRowGroup();
 
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ completionId: string; taskName: string } | null>(null);
@@ -97,6 +102,23 @@ export default function PutzplanScreen() {
     },
     [completeTask],
   );
+
+  function confirmDelete(task: CleaningAgendaRow) {
+    Alert.alert('Aufgabe löschen?', 'Die Aufgabe und ihre gesamte Historie werden entfernt.', [
+      { text: 'Abbrechen', style: 'cancel' },
+      {
+        text: 'Löschen',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteTask.mutateAsync(task.id);
+          } catch (err) {
+            Alert.alert('Konnte nicht gelöscht werden', errorMessage(err));
+          }
+        },
+      },
+    ]);
+  }
 
   if (isLoading) return <LoadingState label="Putzplan wird geladen…" />;
   if (error) return <ErrorState error={error} />;
@@ -141,6 +163,8 @@ export default function PutzplanScreen() {
             busy={pendingTaskId === item.id}
             onComplete={() => void handleComplete(item)}
             onPress={() => router.push(`/putzplan/${item.id}`)}
+            onDelete={() => confirmDelete(item)}
+            swipeGroup={swipeGroup}
           />
         )}
         ListEmptyComponent={

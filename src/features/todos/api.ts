@@ -89,6 +89,23 @@ export async function deleteTodo(todoId: string): Promise<void> {
 }
 
 /**
+ * Deletes a whole "Einkauf" — every row closed together in one checkout (see
+ * the Trip grouping in the Einkaufshistorie, keyed off a shared `cleared_at`).
+ *
+ * A real delete, same as deleteTodo() above: it also drops these rows out of
+ * v_shopping_suggestions' purchase counts, which is the point — "this trip
+ * should never have counted" is what "delete completely" means here. It does
+ * not touch the stock already booked into inventory during checkout (a
+ * separate table, separate act) or a linked expense (todos.expense_id is ON
+ * DELETE SET NULL from the other side, not the other way around) — both stay
+ * and can be undone on their own screens if that is also wanted.
+ */
+export async function deleteTrip(todoIds: string[]): Promise<void> {
+  const { error } = await supabase.from('todos').delete().in('id', todoIds);
+  if (error) throw error;
+}
+
+/**
  * Clears the done rows off one list.
  *
  * An UPDATE, not a DELETE. What this household buys and how often is the one

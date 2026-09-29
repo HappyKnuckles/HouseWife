@@ -97,7 +97,7 @@ if (profileA.household_id) {
 }
 
 const { error: createHouseholdErr } = await clientA.rpc('create_household', {
-  p_name: 'Testhaushalt',
+  p_name: householdName,
 });
 if (createHouseholdErr) throw createHouseholdErr;
 
@@ -111,4 +111,4 @@ if (signInBErr) throw signInBErr;
 const { error: acceptErr } = await clientB.rpc('accept_invite', { p_code: code });
 if (acceptErr) throw acceptErr;
 
-console.log('Household "Testhaushalt" created for both users, with the default Putzplan seeded.');
+console.log(`Household "${householdName}" created for both users, with the default Putzplan seeded.`);

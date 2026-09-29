@@ -175,6 +175,15 @@ export function useCloseShoppingRows() {
   });
 }
 
+/** Deletes a whole shopping trip out of the Einkaufshistorie. See deleteTrip(). */
+export function useDeleteTrip() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (todoIds: string[]) => api.deleteTrip(todoIds),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
+  });
+}
+
 /** Attaches an already-closed shop to the expense it was billed into. */
 export function useLinkShoppingRows() {
   const queryClient = useQueryClient();
