@@ -132,6 +132,14 @@ export function useCreateRecurringExpense() {
   });
 }
 
+export function useUpdateRecurringExpense() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: api.UpdateRecurringExpenseInput) => api.updateRecurringExpense(input),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+  });
+}
+
 export function useSetRecurringExpenseActive() {
   const queryClient = useQueryClient();
   return useMutation({
