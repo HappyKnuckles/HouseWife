@@ -416,6 +416,8 @@ export default function FixkostenScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
+        // iOS: lift the list above the keyboard so the lower form fields stay reachable.
+        automaticallyAdjustKeyboardInsets
         ListHeaderComponent={header}
         ListEmptyComponent={
           <EmptyState
