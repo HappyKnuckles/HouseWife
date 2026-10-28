@@ -1,4 +1,4 @@
-# Deploys the web build (PWA) to EAS Hosting on every push to `pwa`.
+# Deploys the web build (PWA) to EAS Hosting on every push to `main`.
 # The deploy job runs `expo export --platform web` itself with the EAS
 # `production` environment's variables, then promotes to housewife.expo.app.
 # Manual run without a push: eas workflow:run .eas/workflows/deploy-pwa.yml
@@ -6,7 +6,7 @@ name: Deploy PWA
 
 on:
   push:
-    branches: ['pwa']
+    branches: ['main']
 
 jobs:
   deploy:
