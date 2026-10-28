@@ -106,17 +106,22 @@ export default function LocationsScreen() {
 
       {/* Deliberately stays open after a create: the form re-points itself at
           the location it just made, which is how "Schrank, dann Schub 1-3"
-          happens in one sitting. The header button closes it. */}
-      {composing ? (
-        <Card style={styles.composer}>
-          <LocationComposer />
-        </Card>
-      ) : null}
-
+          happens in one sitting. The header button closes it. It lives in the
+          list header so it scrolls with the list on small phones (#18). */}
       <FlatList
         data={locations ?? []}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        // iOS: lift the list above the keyboard so the lower form fields stay reachable.
+        automaticallyAdjustKeyboardInsets
+        ListHeaderComponent={
+          composing ? (
+            <Card style={styles.composer}>
+              <LocationComposer />
+            </Card>
+          ) : null
+        }
         ListEmptyComponent={
           <EmptyState
             title="Noch keine Orte"

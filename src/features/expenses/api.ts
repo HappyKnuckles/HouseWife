@@ -277,6 +277,40 @@ export async function createRecurringExpense(
   return data;
 }
 
+export type UpdateRecurringExpenseInput = Omit<CreateRecurringExpenseInput, 'householdId'> & {
+  id: string;
+};
+
+/**
+ * Editing a template only changes what the cron books *from now on*. Expenses
+ * it already generated are real ledger rows and stay as they were — a price
+ * increase should not rewrite last year's insurance payment.
+ */
+export async function updateRecurringExpense(
+  input: UpdateRecurringExpenseInput,
+): Promise<RecurringExpenseRow> {
+  const unit = input.recurrenceUnit ?? 'month';
+
+  const { data, error } = await supabase
+    .from('recurring_expenses')
+    .update({
+      name: input.name,
+      category: input.category ?? null,
+      amount_cents: input.amountCents,
+      paid_by: input.paidBy,
+      recurrence_unit: unit,
+      recurrence_interval: input.recurrenceInterval ?? 1,
+      day_of_month: unit === 'month' ? (input.dayOfMonth ?? null) : null,
+      next_due_on: input.nextDueOn,
+    })
+    .eq('id', input.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 /** Pausing rather than deleting keeps the already-generated history intact. */
 export async function setRecurringExpenseActive(
   id: string,
